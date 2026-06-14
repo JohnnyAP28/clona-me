@@ -23,7 +23,6 @@ module.exports = {
       });
     }
 
-    // Conta o que será deletado
     const roleCount = guild.roles.cache.filter(r => r.name !== '@everyone' && !r.managed).size;
     const channelCount = guild.channels.cache.size;
     const categoryCount = guild.channels.cache.filter(c => c.type === 4).size;
@@ -60,35 +59,27 @@ module.exports = {
     } catch (err) {
       console.error('[ERRO] Falha ao mostrar modal /resetar:', err);
       if (!interaction.replied) {
-        await interaction.reply({
-          content: '❌ Erro ao abrir o formulário. Tente novamente.',
-          ephemeral: true,
-        });
+        await interaction.reply({ content: 'Erro ao abrir o formulário. Tente novamente.', ephemeral: true });
       }
     }
   },
 
   async handleModal(interaction) {
-    // Defer imediatamente para evitar timeout da interação
     try {
       const confirmation = interaction.fields.getTextInputValue('clean_confirm').trim();
 
       if (confirmation !== 'CONFIRMO') {
         return interaction.reply({
-          content: '❌ Operação cancelada. Você precisa digitar **CONFIRMO** exatamente como pedido.',
+          content: 'Operação cancelada. Você precisa digitar **CONFIRMO** exatamente como pedido.',
           ephemeral: true,
         });
       }
 
       const destGuild = interaction.guild;
       if (!destGuild) {
-        return interaction.reply({
-          content: '❌ Servidor não encontrado.',
-          ephemeral: true,
-        });
+        return interaction.reply({ content: 'Servidor não encontrado.', ephemeral: true });
       }
 
-      // Responde primeiro (embed "iniciando")
       await interaction.reply({
         embeds: [
           new EmbedBuilder()
@@ -97,14 +88,13 @@ module.exports = {
             .setDescription(
               `**Servidor:** ${destGuild.name}\n\n` +
               `⏳ Apagando cargos, canais e categorias...\n` +
-              `⏳ Restaurando nome e ícone padrão...`
+              `⏳ Restaurando nome, ícone e canal de comandos...`
             )
             .setFooter({ text: 'Clona-Me • Isso pode levar alguns minutos' })
             .setTimestamp(),
         ],
       });
 
-      // Executa a limpeza
       try {
         const result = await cleanServer(destGuild);
 
@@ -115,7 +105,8 @@ module.exports = {
               .setColor(0x57f287)
               .setDescription(
                 `**Nome:** ${result.name}\n` +
-                `**Ícone:** ${result.iconSet ? '✅ Restaurado' : '⚠️ Não foi possível aplicar'}\n\n` +
+                `**Ícone:** ${result.iconSet ? '✅ Restaurado' : '⚠️ Não foi possível aplicar'}\n` +
+                `**Canal Fábrica:** ${result.factoryChannelCreated ? '✅ Criado (💻・Comandos > ⌨️・comandos)' : '⚠️ Não criado'}\n\n` +
                 `• ${result.rolesDeleted} cargos removidos\n` +
                 `• ${result.channelsDeleted} canais/categorias removidos\n` +
                 `• ${result.errors} erros`
@@ -132,23 +123,14 @@ module.exports = {
         });
       }
     } catch (err) {
-      // Erro ao ler campos do formulário ou ao responder
       console.error('[ERRO] Modal /resetar:', err);
       try {
         if (!interaction.replied && !interaction.deferred) {
-          await interaction.reply({
-            content: '❌ Algo deu errado ao processar o formulário. Tente novamente.',
-            ephemeral: true,
-          });
+          await interaction.reply({ content: 'Algo deu errado ao processar o formulário. Tente novamente.', ephemeral: true });
         } else {
-          await interaction.followUp({
-            content: '❌ Algo deu errado ao processar o formulário. Tente novamente.',
-            ephemeral: true,
-          });
+          await interaction.followUp({ content: 'Algo deu errado ao processar o formulário. Tente novamente.', ephemeral: true });
         }
-      } catch (_) {
-        // Interação já expirou — nada a fazer
-      }
+      } catch (_) {}
     }
   },
 };
