@@ -26,15 +26,15 @@ module.exports = {
 
     // ── Modal Submits ───────────────────────────────────
     if (interaction.isModalSubmit()) {
+      // O customId do modal mapeia para o nome do COMANDO (setName), não o nome do arquivo
       const modalMap = {
         'clone_modal': 'clone',
-        'clean_modal': 'clean',
+        'clean_modal': 'resetar',   // ← CORRIGIDO: o comando se chama /resetar
       };
 
       const commandName = modalMap[interaction.customId];
 
       if (!commandName) {
-        // Modal desconhecido — responde para não deixar o usuário esperando
         console.warn(`[AVISO] Modal desconhecido: ${interaction.customId}`);
         try {
           await interaction.reply({
@@ -47,7 +47,7 @@ module.exports = {
 
       const command = interaction.client.commands.get(commandName);
       if (!command || !command.handleModal) {
-        console.error(`[ERRO] Comando "${commandName}" não tem handleModal`);
+        console.error(`[ERRO] Comando "${commandName}" não tem handleModal. Comandos disponíveis: ${[...interaction.client.commands.keys()].join(', ')}`);
         try {
           await interaction.reply({
             content: '❌ Erro interno. O comando não possui manipulador de formulário.',
