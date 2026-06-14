@@ -1,2 +1,8 @@
-node_modules/
+# Environment
 .env
+
+# Data (panel database)
+data/
+
+# Node
+node_modules/
