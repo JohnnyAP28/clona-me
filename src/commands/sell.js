@@ -1,4 +1,4 @@
-const { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, ChannelType, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
 const { createPanel, getPanel, buildPanelEmbed, buildPurchaseButton, addStock, resolveColor } = require('../utils/sellManager');
 
 // ── /venda ─────────────────────────────────────────────
@@ -7,111 +7,131 @@ module.exports = {
     .setName('venda')
     .setDescription('Cria um painel de venda completo')
     .addChannelOption(opt =>
-      opt.setName('canal').setDescription('Canal onde o painel será publicado').setRequired(true).addChannelTypes(ChannelType.GuildText)
-    )
-    .addAttachmentOption(opt =>
-      opt.setName('icone').setDescription('Upload do ícone/thumbnail').setRequired(false)
-    )
-    .addAttachmentOption(opt =>
-      opt.setName('banner').setDescription('Upload do banner/imagem').setRequired(false)
+      opt.setName('canal').setDescription('Canal onde o painel será publicado').setRequired(true)
     ),
 
   async execute(interaction) {
-    if (!interaction.memberPermissions?.has('Administrator')) {
-      return interaction.reply({ content: 'Você precisa de permissão de **Administrador**.', ephemeral: true });
+    try {
+      if (!interaction.memberPermissions?.has('Administrator')) {
+        return interaction.reply({ content: 'Você precisa de permissão de **Administrador**.', ephemeral: true });
+      }
+
+      const channel = interaction.options.getChannel('canal');
+      if (!channel || (channel.type !== 0 && channel.type !== 'GUILD_TEXT')) {
+        return interaction.reply({ content: 'Selecione um canal de texto válido.', ephemeral: true });
+      }
+
+      const panel = createPanel(interaction.guildId, interaction.user.id, channel.id);
+
+      // Tenta ler anexos (suporta discord.js v14+ e versões antigas)
+      let iconUrl = '';
+      let bannerUrl = '';
+      try {
+        const iconAtt = interaction.options.getAttachment?.('icone');
+        const bannerAtt = interaction.options.getAttachment?.('banner');
+        if (iconAtt) iconUrl = iconAtt.url;
+        if (bannerAtt) bannerUrl = bannerAtt.url;
+      } catch (_) {
+        // addAttachmentOption não suportado → ignora
+      }
+
+      if (iconUrl) panel.iconUrl = iconUrl;
+      if (bannerUrl) panel.bannerUrl = bannerUrl;
+
+      const modal = new ModalBuilder()
+        .setCustomId(`sell_modal_${panel.id}`)
+        .setTitle('Criar Painel de Venda');
+
+      const titleInput = new TextInputBuilder()
+        .setCustomId('sell_title')
+        .setLabel('Título do painel')
+        .setPlaceholder('Ex: 🔥 Assinatura Netflix Premium 12 meses')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(256);
+
+      const descInput = new TextInputBuilder()
+        .setCustomId('sell_desc')
+        .setLabel('Descrição')
+        .setPlaceholder('Descreva o produto, benefícios, garantia...')
+        .setStyle(TextInputStyle.Paragraph)
+        .setRequired(true)
+        .setMaxLength(2000);
+
+      const priceInput = new TextInputBuilder()
+        .setCustomId('sell_price')
+        .setLabel('Valor de venda')
+        .setPlaceholder('Ex: R$ 19,90')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(true)
+        .setMaxLength(60);
+
+      const extPriceInput = new TextInputBuilder()
+        .setCustomId('sell_extprice')
+        .setLabel('Valor real (fora do Discord)')
+        .setPlaceholder('Ex: R$ 55,90 — mostra o desconto')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setMaxLength(60);
+
+      const colorInput = new TextInputBuilder()
+        .setCustomId('sell_color')
+        .setLabel('Cor (HEX ou nome: roxo/azul/vermelho...)')
+        .setPlaceholder('#8A2BE2 ou roxo')
+        .setStyle(TextInputStyle.Short)
+        .setRequired(false)
+        .setValue('#8A2BE2')
+        .setMaxLength(32);
+
+      modal.addComponents(
+        new ActionRowBuilder().addComponents(titleInput),
+        new ActionRowBuilder().addComponents(descInput),
+        new ActionRowBuilder().addComponents(priceInput),
+        new ActionRowBuilder().addComponents(extPriceInput),
+        new ActionRowBuilder().addComponents(colorInput),
+      );
+
+      await interaction.showModal(modal);
+    } catch (err) {
+      console.error('[VENDA] Erro ao executar:', err.message, err.stack);
+      try {
+        if (!interaction.replied) {
+          await interaction.reply({ content: `❌ Erro: ${err.message.slice(0, 200)}`, ephemeral: true });
+        }
+      } catch (_) {}
     }
-
-    const channel = interaction.options.getChannel('canal');
-    if (!channel || channel.type !== ChannelType.GuildText) {
-      return interaction.reply({ content: 'Selecione um canal de texto válido.', ephemeral: true });
-    }
-
-    const iconAtt = interaction.options.getAttachment('icone');
-    const bannerAtt = interaction.options.getAttachment('banner');
-
-    const panel = createPanel(interaction.guildId, interaction.user.id, channel.id);
-
-    // Salva anexos se fornecidos
-    if (iconAtt) panel.iconUrl = iconAtt.url;
-    if (bannerAtt) panel.bannerUrl = bannerAtt.url;
-
-    const modal = new ModalBuilder()
-      .setCustomId(`sell_modal_${panel.id}`)
-      .setTitle('Criar Painel de Venda');
-
-    const titleInput = new TextInputBuilder()
-      .setCustomId('sell_title')
-      .setLabel('Título do painel')
-      .setPlaceholder('Ex: 🔥 Assinatura Netflix Premium 12 meses')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(256);
-
-    const descInput = new TextInputBuilder()
-      .setCustomId('sell_desc')
-      .setLabel('Descrição')
-      .setPlaceholder('Descreva o produto, benefícios, garantia...')
-      .setStyle(TextInputStyle.Paragraph)
-      .setRequired(true)
-      .setMaxLength(2000);
-
-    const priceInput = new TextInputBuilder()
-      .setCustomId('sell_price')
-      .setLabel('Valor de venda')
-      .setPlaceholder('Ex: R$ 19,90')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(true)
-      .setMaxLength(60);
-
-    const extPriceInput = new TextInputBuilder()
-      .setCustomId('sell_extprice')
-      .setLabel('Valor real (fora do Discord)')
-      .setPlaceholder('Ex: R$ 55,90 — mostra o desconto')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(false)
-      .setMaxLength(60);
-
-    const colorInput = new TextInputBuilder()
-      .setCustomId('sell_color')
-      .setLabel('Cor (HEX ou nome: roxo/azul/vermelho/verde...)')
-      .setPlaceholder('#8A2BE2 ou roxo')
-      .setStyle(TextInputStyle.Short)
-      .setRequired(false)
-      .setValue('#8A2BE2')
-      .setMaxLength(32);
-
-    modal.addComponents(
-      new ActionRowBuilder().addComponents(titleInput),
-      new ActionRowBuilder().addComponents(descInput),
-      new ActionRowBuilder().addComponents(priceInput),
-      new ActionRowBuilder().addComponents(extPriceInput),
-      new ActionRowBuilder().addComponents(colorInput),
-    );
-
-    await interaction.showModal(modal);
   },
 
   async handleModal(interaction) {
-    const panelId = parseInt(interaction.customId.replace('sell_modal_', ''));
-    const panel = getPanel(panelId);
-    if (!panel) return interaction.reply({ content: 'Painel não encontrado. Use /venda novamente.', ephemeral: true });
+    try {
+      const panelId = parseInt(interaction.customId.replace('sell_modal_', ''));
+      const panel = getPanel(panelId);
+      if (!panel) return interaction.reply({ content: 'Painel não encontrado. Use /venda novamente.', ephemeral: true });
 
-    panel.title = interaction.fields.getTextInputValue('sell_title').trim();
-    panel.description = interaction.fields.getTextInputValue('sell_desc').trim();
-    panel.price = interaction.fields.getTextInputValue('sell_price').trim();
-    panel.externalPrice = interaction.fields.getTextInputValue('sell_extprice').trim();
-    const colorVal = interaction.fields.getTextInputValue('sell_color').trim();
-    if (colorVal) panel.color = resolveColor(colorVal);
+      panel.title = interaction.fields.getTextInputValue('sell_title').trim();
+      panel.description = interaction.fields.getTextInputValue('sell_desc').trim();
+      panel.price = interaction.fields.getTextInputValue('sell_price').trim();
+      panel.externalPrice = interaction.fields.getTextInputValue('sell_extprice').trim();
+      const colorVal = interaction.fields.getTextInputValue('sell_color').trim();
+      if (colorVal) panel.color = resolveColor(colorVal);
 
-    const embed = buildPanelEmbed(panel);
-    embed.setTitle('🔧 Configurar Painel — Preview');
-    embed.setDescription(
-      panel.description + '\n\n' +
-      '**Use os botões abaixo para configurar.**\n' +
-      'Quando estiver pronto, clique em **Publicar Agora**.'
-    );
+      const embed = buildPanelEmbed(panel);
+      embed.setTitle('🔧 Configurar Painel — Preview');
+      embed.setDescription(
+        (panel.description || '') + '\n\n' +
+        '**Use os botões abaixo para configurar.**\n' +
+        'Quando estiver pronto, clique em **Publicar Agora**.'
+      );
 
-    await interaction.reply({ embeds: [embed], components: buildConfigRows(panel), ephemeral: true });
+      await interaction.reply({ embeds: [embed], components: buildConfigRows(panel), ephemeral: true });
+    } catch (err) {
+      console.error('[VENDA] Erro no modal:', err.message);
+      try {
+        if (!interaction.replied) {
+          await interaction.reply({ content: `❌ Erro: ${err.message.slice(0, 200)}`, ephemeral: true });
+        }
+      } catch (_) {}
+    }
   },
 };
 
@@ -132,8 +152,7 @@ function buildConfigRows(panel) {
   return [r1, r2];
 }
 
-// ── Sub-Modals (exportados para interactionCreate) ─────
-
+// ── Sub-Modals ────────────────────────────────────────
 function buildStockModal(panelId) {
   return new ModalBuilder().setCustomId(`sell_stock_${panelId}`).setTitle('Adicionar Estoque')
     .addComponents(
