@@ -5,12 +5,15 @@ const {
   TextInputStyle,
   ActionRowBuilder,
   EmbedBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require('discord.js');
 
 const { cloneRoles } = require('../utils/cloneRoles');
 const { cloneChannels } = require('../utils/cloneChannels');
 const { cloneServerSettings } = require('../utils/cloneServerSettings');
 const { cloneMessages } = require('../utils/cloneMessages');
+const { ensureGuildAccess, waitForGuildJoin } = require('../utils/guildAccess');
 
 // ── /clone ───────────────────────────────────────────
 module.exports = {
@@ -111,14 +114,46 @@ module.exports = {
     }
 
     const destGuild = interaction.guild;
+    const client = interaction.client;
 
+    // Verifica se o bot está no servidor alvo
+    const { guild: targetGuild, inviteUrl } = await ensureGuildAccess(targetServerId, client);
+
+    // Se não está, mostra o botão de convite
+    if (!targetGuild) {
+      const button = new ButtonBuilder()
+        .setLabel('Adicionar bot ao servidor alvo')
+        .setURL(inviteUrl)
+        .setStyle(ButtonStyle.Link);
+
+      const row = new ActionRowBuilder().addComponents(button);
+
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setTitle('🔗 Convite necessário')
+            .setColor(0xf0b232)
+            .setDescription(
+              `O **Clona-Me** não está no servidor \`${targetServerId}\`.\n\n` +
+              `**Toque no botão abaixo** para adicionar o bot ao servidor alvo com permissão de Administrador.\n\n` +
+              `Depois de adicionar, **rode \`/clone\` novamente** que a clonagem continua automaticamente.\n\n` +
+              `Após a clonagem, o bot sairá sozinho do servidor alvo.`
+            )
+            .setFooter({ text: 'Clona-Me • O bot precisa de acesso para ler a estrutura' }),
+        ],
+        components: [row],
+      });
+      return;
+    }
+
+    // Bot está no servidor alvo — iniciar clonagem
     await interaction.reply({
       embeds: [
         new EmbedBuilder()
           .setTitle('🔄 Clonagem Iniciada')
           .setColor(0x5865f2)
           .setDescription(
-            `**Servidor Alvo:** \`${targetServerId}\`\n` +
+            `**Servidor Alvo:** \`${targetServerId}\` (${targetGuild.name})\n` +
             `**Destino:** ${destGuild.name}\n\n` +
             `• Cargos: ${cloneRolesFlag ? '✅' : '❌'}\n` +
             `• Categorias e Canais: ${cloneChannelsFlag ? '✅' : '❌'}\n` +
@@ -137,7 +172,7 @@ module.exports = {
       // 1. Cargos
       if (cloneRolesFlag) {
         const statusMsg = await interaction.followUp({ content: '🔄 **Clonando cargos...**', ephemeral: false });
-        const roleResult = await cloneRoles(targetServerId, destGuild);
+        const roleResult = await cloneRoles(targetGuild, destGuild);
         results.push(`**Cargos:** ${roleResult.created} criados, ${roleResult.skipped} pulados, ${roleResult.errors} erros`);
         await statusMsg.delete().catch(() => {});
       }
@@ -145,7 +180,7 @@ module.exports = {
       // 2. Categorias e Canais (com permissões)
       if (cloneChannelsFlag) {
         const statusMsg = await interaction.followUp({ content: '🔄 **Clonando categorias e canais...**', ephemeral: false });
-        const channelResult = await cloneChannels(targetServerId, destGuild);
+        const channelResult = await cloneChannels(targetGuild, destGuild);
         results.push(`**Canais:** ${channelResult.created} criados, ${channelResult.errors} erros`);
         await statusMsg.delete().catch(() => {});
       }
@@ -153,7 +188,7 @@ module.exports = {
       // 3. Configurações do servidor
       if (cloneSettingsFlag) {
         const statusMsg = await interaction.followUp({ content: '🔄 **Aplicando configurações do servidor...**', ephemeral: false });
-        const settingsResult = await cloneServerSettings(targetServerId, destGuild);
+        const settingsResult = await cloneServerSettings(targetGuild, destGuild);
         results.push(`**Configurações:** ${settingsResult.applied} aplicadas, ${settingsResult.errors} erros`);
         await statusMsg.delete().catch(() => {});
       }
@@ -161,7 +196,7 @@ module.exports = {
       // 4. Mensagens
       if (cloneMessagesFlag) {
         const statusMsg = await interaction.followUp({ content: '🔄 **Clonando mensagens...** (isso pode demorar)', ephemeral: false });
-        const msgResult = await cloneMessages(targetServerId, destGuild);
+        const msgResult = await cloneMessages(targetGuild, destGuild);
         results.push(`**Mensagens:** ${msgResult.cloned} mensagens clonadas, ${msgResult.errors} erros`);
         await statusMsg.delete().catch(() => {});
       }
@@ -172,14 +207,31 @@ module.exports = {
           new EmbedBuilder()
             .setTitle('✅ Clonagem Concluída')
             .setColor(0x57f287)
-            .setDescription(results.join('\n') || 'Nenhuma operação selecionada.')
+            .setDescription(
+              `${results.join('\n') || 'Nenhuma operação selecionada.'}\n\n` +
+              `🛑 **O bot sairá do servidor alvo em 5 segundos...**`
+            )
             .setFooter({ text: 'Clona-Me • Servidor clonado com sucesso' })
             .setTimestamp(),
         ],
       });
 
+      // Sai do servidor alvo após 5s (para não ocupar slot)
+      setTimeout(async () => {
+        try {
+          await targetGuild.leave();
+          console.log(`[OK] Saiu do servidor alvo: ${targetGuild.name}`);
+        } catch (e) {
+          console.error(`[ERRO] Falha ao sair do servidor alvo:`, e.message);
+        }
+      }, 5000);
+
     } catch (error) {
       console.error('[ERRO] Clonagem:', error);
+
+      // Tenta sair do servidor alvo mesmo em caso de erro
+      try { await targetGuild.leave().catch(() => {}); } catch {}
+
       await interaction.followUp({
         content: `❌ **Erro durante a clonagem:**\n\`\`\`${error.message.slice(0, 1500)}\`\`\``,
         ephemeral: false,

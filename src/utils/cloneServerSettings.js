@@ -3,37 +3,12 @@ const config = require('../config');
 /**
  * Aplica as configurações do servidor alvo no servidor de destino.
  *
- * Configurações copiadas:
- *  - Nome do servidor
- *  - Ícone
- *  - Nível de verificação
- *  - Modo de conteúdo explícito
- *  - Notificações padrão
- *  - Região (se disponível)
- *
- * IMPORTANTE: O bot precisa estar no servidor alvo para ler as configurações.
- *
- * @param {string} targetServerId - ID do servidor de origem
+ * @param {Guild} targetGuild - Guild de origem
  * @param {Guild} destGuild - Guild de destino
  * @returns {Promise<{applied: number, errors: number}>}
  */
-async function cloneServerSettings(targetServerId, destGuild) {
+async function cloneServerSettings(targetGuild, destGuild) {
   const result = { applied: 0, errors: 0 };
-
-  let targetGuild;
-  try {
-    targetGuild = await destGuild.client.guilds.fetch(targetServerId).catch(() => null);
-  } catch {
-    targetGuild = null;
-  }
-
-  if (!targetGuild) {
-    throw new Error(
-      'Não foi possível acessar o servidor alvo. O bot precisa estar no servidor de origem ' +
-      `(\`${targetServerId}\`) para ler as configurações.\n\n` +
-      'Adicione o bot ao servidor alvo e tente novamente.'
-    );
-  }
 
   const settingsToApply = [];
 

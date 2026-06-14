@@ -9,30 +9,12 @@ const config = require('../config');
  * Clona categorias e canais do servidor alvo para o destino,
  * incluindo permissões.
  *
- * IMPORTANTE: O bot precisa estar no servidor alvo para ler os canais.
- *
- * @param {string} targetServerId - ID do servidor de origem
+ * @param {Guild} targetGuild - Guild de origem
  * @param {Guild} destGuild - Guild de destino
  * @returns {Promise<{created: number, errors: number}>}
  */
-async function cloneChannels(targetServerId, destGuild) {
+async function cloneChannels(targetGuild, destGuild) {
   const result = { created: 0, errors: 0 };
-
-  // Tenta acessar o servidor alvo
-  let targetGuild;
-  try {
-    targetGuild = await destGuild.client.guilds.fetch(targetServerId).catch(() => null);
-  } catch {
-    targetGuild = null;
-  }
-
-  if (!targetGuild) {
-    throw new Error(
-      'Não foi possível acessar o servidor alvo. O bot precisa estar no servidor de origem ' +
-      `(\`${targetServerId}\`) para clonar os canais.\n\n` +
-      'Adicione o bot ao servidor alvo e tente novamente.'
-    );
-  }
 
   // Busca todos os canais do servidor alvo
   const targetChannels = await targetGuild.channels.fetch();
@@ -163,12 +145,8 @@ function mapPermissionOverwrites(overwrites, roleNameToDestId) {
   const mapped = [];
 
   for (const [targetId, overwrite] of overwrites.cache || overwrites) {
-    // Tenta encontrar o cargo correspondente no destino pelo nome
-    // Nota: não temos acesso ao nome do cargo do servidor alvo aqui,
-    // então mapeamos apenas o @everyone (guild id) diretamente.
-    // Para cargos específicos, pulamos — o usuário pode reconfigurar depois.
     mapped.push({
-      id: targetId, // será resolvido pelo Discord ao criar
+      id: targetId,
       allow: overwrite.allow,
       deny: overwrite.deny,
       type: overwrite.type,
