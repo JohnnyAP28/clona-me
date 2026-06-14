@@ -1,330 +1,208 @@
-const { EmbedBuilder } = require('discord.js');
-const { getPanel, buildPanelEmbed, buildPurchaseButton, addStock, consumeStock, resolveColor } = require('../utils/sellManager');
+const { EmbedBuilder, ModalBuilder, ActionRowBuilder, TextInputBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const { getPanel, buildPanelEmbed, buildPurchaseButton, addStock, consumeStock, resolveColor, listPanels, deletePanel } = require('../utils/sellManager');
 const sell = require('../commands/sell');
-const editCmd = require('../commands/edit');
+const { showEditMenu } = require('../commands/edit');
 
 module.exports = {
   name: 'interactionCreate',
   async execute(interaction) {
-    // ═══════════════════════════════════════════
-    //  SLASH COMMANDS
-    // ═══════════════════════════════════════════
+    // ═══ SLASH COMMANDS ═══
     if (interaction.isChatInputCommand()) {
       const cmd = interaction.client.commands.get(interaction.commandName);
-      if (!cmd) { console.error(`[ERRO] Comando não encontrado: ${interaction.commandName}`); return; }
+      if (!cmd) { console.error(`[ERRO] Cmd: ${interaction.commandName}`); return; }
       try { await cmd.execute(interaction); }
-      catch (e) { console.error(`[ERRO] ${interaction.commandName}:`, e); await safeReply(interaction, 'Erro ao executar comando.'); }
+      catch (e) { console.error(`[ERRO] ${interaction.commandName}:`, e); await safeReply(interaction, 'Erro ao executar.'); }
       return;
     }
 
-    // ═══════════════════════════════════════════
-    //  MODALS
-    // ═══════════════════════════════════════════
+    // ═══ MODALS ═══
     if (interaction.isModalSubmit()) {
       const cid = interaction.customId;
-
-      // Clona-Me
       if (cid === 'clone_modal') return handleCmdModal(interaction, 'clone');
       if (cid === 'clean_modal') return handleCmdModal(interaction, 'resetar');
-
-      // /venda sub-modals
-      if (cid.startsWith('sell_modal_')) return handleSellMainModal(interaction);
-      if (cid.startsWith('sell_stock_')) return handleStockModal(interaction, cid);
-      if (cid.startsWith('sell_delivery_')) return handleDeliveryModal(interaction, cid);
-      if (cid.startsWith('sell_icon_')) return handleIconModal(interaction, cid);
-      if (cid.startsWith('sell_banner_')) return handleBannerModal(interaction, cid);
-      if (cid.startsWith('sell_display_')) return handleDisplayModal(interaction, cid);
-
-      // /editar modals
-      if (cid.startsWith('edit_items_')) return handleEditItemsModal(interaction, cid);
+      if (cid.startsWith('sell_modal_')) return handleCmdModal(interaction, 'venda');
+      if (cid.startsWith('sell_stock_')) return handleStock(interaction, cid);
+      if (cid.startsWith('sell_delivery_')) return handleDelivery(interaction, cid);
+      if (cid.startsWith('sell_icon_')) return handleIcon(interaction, cid);
+      if (cid.startsWith('sell_banner_')) return handleBanner(interaction, cid);
+      if (cid.startsWith('sell_display_')) return handleDisplay(interaction, cid);
+      if (cid.startsWith('edit_items_')) return handleReplaceStock(interaction, cid);
+      if (cid.startsWith('edit_title_')) return handleEditTitle(interaction, cid);
+      if (cid.startsWith('edit_desc_')) return handleEditDesc(interaction, cid);
+      if (cid.startsWith('edit_price_')) return handleEditPrice(interaction, cid);
+      if (cid.startsWith('edit_color_')) return handleEditColor(interaction, cid);
     }
 
-    // ═══════════════════════════════════════════
-    //  BUTTONS
-    // ═══════════════════════════════════════════
+    // ═══ BUTTONS ═══
     if (interaction.isButton()) {
       const cid = interaction.customId;
-      if (cid.startsWith('sellcfg_')) return handleConfigButton(interaction, cid);
-      if (cid.startsWith('buy_')) return handlePurchaseButton(interaction, cid);
-      if (cid.startsWith('editcfg_')) return handleEditConfigButton(interaction, cid);
+      if (cid.startsWith('sellcfg_')) return handleSellConfigBtn(interaction, cid);
+      if (cid.startsWith('buy_')) return handlePurchase(interaction, cid);
+      if (cid.startsWith('editcfg_')) return handleEditConfigBtn(interaction, cid);
     }
 
-    // ═══════════════════════════════════════════
-    //  SELECT MENUS
-    // ═══════════════════════════════════════════
+    // ═══ SELECT MENUS ═══
     if (interaction.isStringSelectMenu()) {
       const cid = interaction.customId;
-      if (cid.startsWith('sell_thumb_')) return handleThumbSelect(interaction, cid);
-      if (cid.startsWith('edit_select_')) return handleEditSelect(interaction, cid);
+      if (cid.startsWith('sell_thumb_')) return handleThumbToggle(interaction, cid);
+      if (cid === 'edit_select_panel') return handleEditSelect(interaction);
+      if (cid === 'edit_delete_multi') return handleDeleteMulti(interaction);
     }
   },
 };
 
-// ── Utils ──────────────────────────────────────────
-async function safeReply(i, msg) {
-  try {
-    if (i.replied || i.deferred) await i.followUp({ content: msg, ephemeral: true });
-    else await i.reply({ content: msg, ephemeral: true });
-  } catch (_) {}
-}
+// ── Utils ──
+async function safeReply(i, m) { try { if (i.replied||i.deferred) await i.followUp({content:m,ephemeral:true}); else await i.reply({content:m,ephemeral:true}); } catch(_) {} }
 function pid(cid) { return parseInt(cid.split('_').pop()); }
 
 async function handleCmdModal(i, name) {
   const cmd = i.client.commands.get(name);
   if (!cmd?.handleModal) return safeReply(i, 'Erro interno.');
-  try { await cmd.handleModal(i); } catch (e) { console.error(`[ERRO] ${name}:`, e); await safeReply(i, 'Erro ao processar.'); }
+  try { await cmd.handleModal(i); } catch(e) { console.error(`[ERRO] ${name}:`,e); await safeReply(i, 'Erro.'); }
 }
 
-// ═══════════════════════════════════════════════
-//  /VENDA — MODALS
-// ═══════════════════════════════════════════════
-
-async function handleSellMainModal(i) {
-  const cmd = i.client.commands.get('venda');
-  if (!cmd?.handleModal) return safeReply(i, 'Erro interno.');
-  try { await cmd.handleModal(i); } catch (e) { console.error('[ERRO] sell modal:', e); await safeReply(i, 'Erro ao processar painel.'); }
-}
-
-async function handleStockModal(i, cid) {
-  const panel = getPanel(pid(cid));
-  if (!panel) return safeReply(i, 'Painel expirado.');
+// ═══ SELL MODALS ═══
+async function handleStock(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.lockStock = i.fields.getTextInputValue('stock_lock').trim().toLowerCase().startsWith('s');
   const raw = i.fields.getTextInputValue('stock_items').trim();
-  const lock = i.fields.getTextInputValue('stock_lock').trim().toLowerCase();
-  panel.lockStock = lock === 'sim' || lock === 's';
-  // Parse: suporta "item1\n--\nitem2" e "item1 -- item2"
-  const items = raw.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean)
-    .filter(s => s !== '--') // remove linhas só com "--"
-    .join(' -- ')           // rejunta com "--" para split final
-    .split('--').map(s => s.trim()).filter(Boolean);
-  if (items.length > 0) {
-    addStock(panel.id, items);
-    await i.reply({ content: `✅ ${items.length} itens no estoque.${panel.lockStock ? ' 🔒 Estoque travado (não diminui).' : ''}`, ephemeral: true });
-  } else {
-    await i.reply({ content: 'Nenhum item adicionado.', ephemeral: true });
-  }
+  const items = raw.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean).filter(s=>s!=='--').join(' -- ').split('--').map(s=>s.trim()).filter(Boolean);
+  if (items.length) { addStock(p.id, items); await i.reply({content:`✅ ${items.length} itens.${p.lockStock?' 🔒 Travado.':''}`,ephemeral:true}); }
+  else await i.reply({content:'Nenhum item.',ephemeral:true});
+}
+async function handleDelivery(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.deliveryType = i.fields.getTextInputValue('delivery_type').trim().toLowerCase()==='auto'?'auto':'manual';
+  await i.reply({content:`✅ ${p.deliveryType==='auto'?'⚡ Automática':'👤 Manual'}`,ephemeral:true});
+}
+async function handleIcon(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.iconUrl = i.fields.getTextInputValue('icon_url').trim();
+  await i.reply({content:p.iconUrl?'✅ Ícone atualizado.':'✅ Ícone removido.',ephemeral:true});
+}
+async function handleBanner(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.bannerUrl = i.fields.getTextInputValue('banner_url').trim();
+  await i.reply({content:p.bannerUrl?'✅ Banner atualizado.':'✅ Banner removido.',ephemeral:true});
+}
+async function handleDisplay(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.showStock = i.fields.getTextInputValue('show_stock').trim().toLowerCase().startsWith('s');
+  p.showSold = i.fields.getTextInputValue('show_sold').trim().toLowerCase().startsWith('s');
+  await i.reply({content:`✅ Estoque: ${p.showStock?'visível':'oculto'} • Vendidos: ${p.showSold?'visível':'oculto'}`,ephemeral:true});
 }
 
-async function handleDeliveryModal(i, cid) {
-  const panel = getPanel(pid(cid));
-  if (!panel) return safeReply(i, 'Painel expirado.');
-  panel.deliveryType = i.fields.getTextInputValue('delivery_type').trim().toLowerCase() === 'auto' ? 'auto' : 'manual';
-  await i.reply({ content: `✅ Entrega: ${panel.deliveryType === 'auto' ? '⚡ Automática' : '👤 Manual'}`, ephemeral: true });
-}
-
-async function handleIconModal(i, cid) {
-  const panel = getPanel(pid(cid));
-  if (!panel) return safeReply(i, 'Painel expirado.');
-  panel.iconUrl = i.fields.getTextInputValue('icon_url').trim();
-  await i.reply({ content: panel.iconUrl ? '✅ Ícone atualizado.' : '✅ Ícone removido.', ephemeral: true });
-}
-
-async function handleBannerModal(i, cid) {
-  const panel = getPanel(pid(cid));
-  if (!panel) return safeReply(i, 'Painel expirado.');
-  panel.bannerUrl = i.fields.getTextInputValue('banner_url').trim();
-  await i.reply({ content: panel.bannerUrl ? '✅ Banner atualizado.' : '✅ Banner removido.', ephemeral: true });
-}
-
-async function handleDisplayModal(i, cid) {
-  const panel = getPanel(pid(cid));
-  if (!panel) return safeReply(i, 'Painel expirado.');
-  panel.showStock = i.fields.getTextInputValue('show_stock').trim().toLowerCase().startsWith('s');
-  panel.showSold = i.fields.getTextInputValue('show_sold').trim().toLowerCase().startsWith('s');
-  await i.reply({ content: `✅ Estoque: ${panel.showStock ? 'visível' : 'oculto'} • Vendidos: ${panel.showSold ? 'visível' : 'oculto'}`, ephemeral: true });
-}
-
-// ═══════════════════════════════════════════════
-//  /VENDA — CONFIG BUTTONS
-// ═══════════════════════════════════════════════
-
-async function handleConfigButton(i, cid) {
-  const panelId = pid(cid);
-  const panel = getPanel(panelId);
-  if (!panel) return safeReply(i, 'Painel expirado. Use /venda novamente.');
-
-  const action = cid.replace(/sellcfg_/, '').replace(/_\d+$/, '');
-
-  if (action === 'stock') return i.showModal(sell.buildStockModal(panelId));
-  if (action === 'deliv') return i.showModal(sell.buildDeliveryModal(panelId, panel.deliveryType));
-  if (action === 'icon') return i.showModal(sell.buildIconModal(panelId, panel.iconUrl));
-  if (action === 'banner') return i.showModal(sell.buildBannerModal(panelId, panel.bannerUrl));
-  if (action === 'display') return i.showModal(sell.buildDisplayModal(panelId, panel));
-  if (action === 'thumb') {
-    panel.showThumbnail = !panel.showThumbnail;
-    return i.reply({ content: `✅ Thumbnail: ${panel.showThumbnail ? 'ON' : 'OFF'}`, ephemeral: true });
-  }
-  if (action === 'preview') {
-    const embed = buildPanelEmbed(panel);
-    embed.setTitle(`🔍 Preview — ${panel.title || 'Painel de Venda'}`);
-    return i.reply({ embeds: [embed], ephemeral: true });
-  }
-  if (action === 'pub') {
-    if (!panel.title || !panel.price) return safeReply(i, 'Preencha título e valor antes de publicar.');
-    await i.deferReply({ ephemeral: true });
+// ═══ SELL CONFIG ═══
+async function handleSellConfigBtn(i, cid) {
+  const pid2 = pid(cid); const p = getPanel(pid2);
+  if (!p) return safeReply(i, 'Painel expirado.');
+  const act = cid.replace(/sellcfg_/,'').replace(/_\d+$/,'');
+  if (act==='stock') return i.showModal(sell.buildStockModal(pid2));
+  if (act==='deliv') return i.showModal(sell.buildDeliveryModal(pid2, p.deliveryType));
+  if (act==='icon') return i.showModal(sell.buildIconModal(pid2, p.iconUrl));
+  if (act==='banner') return i.showModal(sell.buildBannerModal(pid2, p.bannerUrl));
+  if (act==='display') return i.showModal(sell.buildDisplayModal(pid2, p));
+  if (act==='thumb') { p.showThumbnail=!p.showThumbnail; return i.reply({content:`✅ Thumb: ${p.showThumbnail?'ON':'OFF'}`,ephemeral:true}); }
+  if (act==='preview') { const e=buildPanelEmbed(p); e.setTitle(`🔍 Preview — ${p.title}`); return i.reply({embeds:[e],ephemeral:true}); }
+  if (act==='pub') {
+    if (!p.title||!p.price) return safeReply(i, 'Preencha título e valor.');
+    await i.deferReply({ephemeral:true});
     try {
-      const ch = i.client.channels.cache.get(panel.channelId);
-      if (!ch) return i.followUp({ content: 'Canal não encontrado.', ephemeral: true });
-      const embed = buildPanelEmbed(panel);
-      const btn = buildPurchaseButton(panel.id, panel);
-      const msg = await ch.send({ embeds: [embed], components: [btn] });
-      panel.messageId = msg.id;
-      panel.published = true;
-      await i.followUp({ content: `✅ Painel #${panel.id} publicado em ${ch}.`, ephemeral: true });
-    } catch (e) {
-      console.error('[ERRO] Publish:', e);
-      await i.followUp({ content: `Erro: ${e.message}`, ephemeral: true });
-    }
-    return;
+      const ch=i.client.channels.cache.get(p.channelId); if(!ch) return i.followUp({content:'Canal não encontrado.',ephemeral:true});
+      const emb=buildPanelEmbed(p); const btn=buildPurchaseButton(p.id,p);
+      const msg=await ch.send({embeds:[emb],components:[btn]}); p.messageId=msg.id; p.published=true;
+      await i.followUp({content:`✅ Painel #${p.id} publicado em ${ch}.`,ephemeral:true});
+    } catch(e) { await i.followUp({content:`Erro: ${e.message}`,ephemeral:true}); }
   }
 }
-
-// ═══════════════════════════════════════════════
-//  SELECIONAR POSIÇÃO (agora toggle ON/OFF)
-// ═══════════════════════════════════════════════
-
-async function handleThumbSelect(i, cid) {
-  const panel = getPanel(pid(cid));
-  if (!panel) return safeReply(i, 'Painel expirado.');
-  const val = i.values[0];
-  panel.showThumbnail = val !== 'none';
-  await i.reply({ content: `✅ Thumbnail: ${panel.showThumbnail ? 'ON' : 'OFF'}`, ephemeral: true });
+async function handleThumbToggle(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.showThumbnail = i.values[0]!=='none';
+  await i.reply({content:`✅ Thumb: ${p.showThumbnail?'ON':'OFF'}`,ephemeral:true});
 }
 
-// ═══════════════════════════════════════════════
-//  PURCHASE BUTTON
-// ═══════════════════════════════════════════════
-
-async function handlePurchaseButton(i, cid) {
-  const panel = getPanel(pid(cid));
-  if (!panel) return safeReply(i, 'Este painel não está mais disponível.');
-  await i.deferReply({ ephemeral: true });
-
-  const item = consumeStock(panel.id);
-  if (!item) {
-    return i.followUp({ content: '❌ Estoque esgotado. Avise a staff.', ephemeral: true });
+// ═══ PURCHASE ═══
+async function handlePurchase(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Indisponível.');
+  await i.deferReply({ephemeral:true});
+  const item = consumeStock(p.id);
+  if (!item) return i.followUp({content:'❌ Estoque esgotado. Avise a staff.',ephemeral:true});
+  if (p.published && p.messageId) {
+    try { const ch=i.client.channels.cache.get(p.channelId); const msg=await ch?.messages.fetch(p.messageId).catch(()=>null);
+      if(msg) await msg.edit({embeds:[buildPanelEmbed(p)],components:[buildPurchaseButton(p.id,p)]}); } catch(_){}
   }
-
-  // Atualiza painel publicado
-  if (panel.published && panel.messageId) {
-    try {
-      const ch = i.client.channels.cache.get(panel.channelId);
-      const msg = await ch?.messages.fetch(panel.messageId).catch(() => null);
-      if (msg) {
-        const emb = buildPanelEmbed(panel);
-        const btn = buildPurchaseButton(panel.id, panel);
-        await msg.edit({ embeds: [emb], components: [btn] });
-      }
-    } catch (_) {}
-  }
-
-  const emb = new EmbedBuilder()
-    .setTitle(panel.deliveryType === 'auto' ? '🎁 Compra Realizada — Entrega Automática' : '🛒 Compra Realizada')
-    .setColor(0x57f287)
-    .setDescription(`**${panel.title}**\n${panel.deliveryType === 'auto' ? 'Obrigado por comprar! Aqui está seu produto:' : 'A staff fará a entrega em breve.'}`)
-    .addFields({ name: panel.deliveryType === 'auto' ? '📦 Conteúdo' : '⏳ Aguardando', value: item.slice(0, 1024) })
-    .setFooter({ text: `Venda #${panel.soldCount} • Clona-Me` }).setTimestamp();
-
-  await i.followUp({ embeds: [emb], ephemeral: true });
+  const emb = new EmbedBuilder().setTitle(p.deliveryType==='auto'?'🎁 Entrega Automática':'🛒 Compra Realizada').setColor(0x57f287)
+    .setDescription(`**${p.title}**\n${p.deliveryType==='auto'?'Aqui está seu produto:':'A staff fará a entrega.'}`)
+    .addFields({name:p.deliveryType==='auto'?'📦 Conteúdo':'⏳ Aguarde',value:item.slice(0,1024)})
+    .setFooter({text:`Venda #${p.soldCount} • Clona-Me`}).setTimestamp();
+  await i.followUp({embeds:[emb],ephemeral:true});
 }
 
-// ═══════════════════════════════════════════════
-//  /EDITAR — HANDLERS
-// ═══════════════════════════════════════════════
-
-async function handleEditConfigButton(i, cid) {
-  const panelId = pid(cid);
-  const panel = getPanel(panelId);
-  if (!panel) return safeReply(i, 'Painel expirado.');
-
-  if (cid.startsWith('editcfg_stock_')) return i.showModal(sell.buildStockModal(panelId));
-  if (cid.startsWith('editcfg_deliv_')) return i.showModal(sell.buildDeliveryModal(panelId, panel.deliveryType));
-  if (cid.startsWith('editcfg_icon_')) return i.showModal(sell.buildIconModal(panelId, panel.iconUrl));
-  if (cid.startsWith('editcfg_banner_')) return i.showModal(sell.buildBannerModal(panelId, panel.bannerUrl));
-  if (cid.startsWith('editcfg_display_')) return i.showModal(sell.buildDisplayModal(panelId, panel));
-  if (cid.startsWith('editcfg_thumb_')) {
-    panel.showThumbnail = !panel.showThumbnail;
-    return i.reply({ content: `✅ Thumbnail: ${panel.showThumbnail ? 'ON' : 'OFF'}`, ephemeral: true });
-  }
-  if (cid.startsWith('editcfg_title_')) {
-    return i.showModal(
-      new (require('discord.js').ModalBuilder)().setCustomId(`edit_title_${panelId}`).setTitle('Editar Título')
-        .addComponents(new (require('discord.js').ActionRowBuilder)().addComponents(
-          new (require('discord.js').TextInputBuilder)().setCustomId('new_title').setLabel('Novo título').setStyle(1).setRequired(true).setMaxLength(256).setValue(panel.title)
-        ))
-    );
-  }
-  if (cid.startsWith('editcfg_desc_')) {
-    return i.showModal(
-      new (require('discord.js').ModalBuilder)().setCustomId(`edit_desc_${panelId}`).setTitle('Editar Descrição')
-        .addComponents(new (require('discord.js').ActionRowBuilder)().addComponents(
-          new (require('discord.js').TextInputBuilder)().setCustomId('new_desc').setLabel('Nova descrição').setStyle(2).setRequired(true).setMaxLength(2000).setValue(panel.description)
-        ))
-    );
-  }
-  if (cid.startsWith('editcfg_price_')) {
-    return i.showModal(
-      new (require('discord.js').ModalBuilder)().setCustomId(`edit_price_${panelId}`).setTitle('Editar Valor')
-        .addComponents(new (require('discord.js').ActionRowBuilder)().addComponents(
-          new (require('discord.js').TextInputBuilder)().setCustomId('new_price').setLabel('Novo valor').setStyle(1).setRequired(true).setMaxLength(60).setValue(panel.price)
-        ))
-    );
-  }
-  if (cid.startsWith('editcfg_color_')) {
-    return i.showModal(
-      new (require('discord.js').ModalBuilder)().setCustomId(`edit_color_${panelId}`).setTitle('Editar Cor')
-        .addComponents(new (require('discord.js').ActionRowBuilder)().addComponents(
-          new (require('discord.js').TextInputBuilder)().setCustomId('new_color').setLabel('Cor (HEX ou nome)').setStyle(1).setRequired(false).setMaxLength(32).setValue(panel.color)
-        ))
-    );
-  }
-  if (cid.startsWith('editcfg_delete_')) {
-    panel.published = false;
-    return i.reply({ content: `Painel #${panel.id} "${panel.title}" — confirme com ✅ para deletar.`, ephemeral: true });
-  }
-  if (cid.startsWith('editcfg_items_')) {
-    return i.showModal(
-      new (require('discord.js').ModalBuilder)().setCustomId(`edit_items_${panelId}`).setTitle('Limpar/Substituir Estoque')
-        .addComponents(new (require('discord.js').ActionRowBuilder)().addComponents(
-          new (require('discord.js').TextInputBuilder)().setCustomId('replace_items').setLabel('Novos itens (um por linha, separados por --)').setPlaceholder('item1\n--\nitem2').setStyle(2).setRequired(false).setMaxLength(2000)
-        ))
-    );
-  }
-}
-
-async function handleEditItemsModal(i, cid) {
-  const panel = getPanel(pid(cid));
-  if (!panel) return safeReply(i, 'Painel expirado.');
+// ═══ EDIT MODALS ═══
+async function handleReplaceStock(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
   const raw = i.fields.getTextInputValue('replace_items').trim();
   if (raw) {
-    panel.stock = [];
-    const items = raw.split(/[\n\r]+/).map(s => s.trim()).filter(Boolean)
-      .filter(s => s !== '--').join(' -- ').split('--').map(s => s.trim()).filter(Boolean);
-    addStock(panel.id, items);
-    await i.reply({ content: `✅ Estoque substituído: ${items.length} itens.`, ephemeral: true });
-  } else {
-    await i.reply({ content: 'Nenhum item. Estoque mantido.', ephemeral: true });
-  }
+    p.stock = [];
+    const items = raw.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean).filter(s=>s!=='--').join(' -- ').split('--').map(s=>s.trim()).filter(Boolean);
+    addStock(p.id, items);
+    await i.reply({content:`✅ Estoque: ${items.length} itens.`,ephemeral:true});
+  } else { await i.reply({content:'Estoque mantido.',ephemeral:true}); }
+}
+async function handleEditTitle(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.title = i.fields.getTextInputValue('new_title').trim();
+  await i.reply({content:`✅ Título: **${p.title}**`,ephemeral:true});
+}
+async function handleEditDesc(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.description = i.fields.getTextInputValue('new_desc').trim();
+  await i.reply({content:'✅ Descrição atualizada.',ephemeral:true});
+}
+async function handleEditPrice(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.price = i.fields.getTextInputValue('new_price').trim();
+  await i.reply({content:`✅ Valor: **${p.price}**`,ephemeral:true});
+}
+async function handleEditColor(i, cid) {
+  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
+  p.color = resolveColor(i.fields.getTextInputValue('new_color').trim());
+  await i.reply({content:`✅ Cor: ${p.color}`,ephemeral:true});
 }
 
-async function handleEditSelect(i, cid) {
-  const panelId = pid(cid);
-  const panel = getPanel(panelId);
-  if (!panel) return safeReply(i, 'Painel expirado.');
+// ═══ EDIT CONFIG ═══
+async function handleEditConfigBtn(i, cid) {
+  const pid2 = pid(cid); const p = getPanel(pid2);
+  if (!p) return safeReply(i, 'Painel expirado.');
+  const { ModalBuilder, ActionRowBuilder, TextInputBuilder } = require('discord.js');
+  if (cid.startsWith('editcfg_stock_')) return i.showModal(sell.buildStockModal(pid2));
+  if (cid.startsWith('editcfg_deliv_')) return i.showModal(sell.buildDeliveryModal(pid2, p.deliveryType));
+  if (cid.startsWith('editcfg_icon_')) return i.showModal(sell.buildIconModal(pid2, p.iconUrl));
+  if (cid.startsWith('editcfg_banner_')) return i.showModal(sell.buildBannerModal(pid2, p.bannerUrl));
+  if (cid.startsWith('editcfg_display_')) return i.showModal(sell.buildDisplayModal(pid2, p));
+  if (cid.startsWith('editcfg_thumb_')) { p.showThumbnail=!p.showThumbnail; return i.reply({content:`✅ Thumb: ${p.showThumbnail?'ON':'OFF'}`,ephemeral:true}); }
+  if (cid.startsWith('editcfg_items_')) return i.showModal(new ModalBuilder().setCustomId(`edit_items_${pid2}`).setTitle('Substituir Estoque').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('replace_items').setLabel('Novos itens (um por linha, --)').setPlaceholder('item1\n--\nitem2').setStyle(2).setRequired(false).setMaxLength(2000))));
+  if (cid.startsWith('editcfg_title_')) return i.showModal(new ModalBuilder().setCustomId(`edit_title_${pid2}`).setTitle('Editar Título').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_title').setLabel('Novo título').setStyle(1).setRequired(true).setMaxLength(256).setValue(p.title))));
+  if (cid.startsWith('editcfg_desc_')) return i.showModal(new ModalBuilder().setCustomId(`edit_desc_${pid2}`).setTitle('Editar Descrição').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_desc').setLabel('Nova descrição').setStyle(2).setRequired(true).setMaxLength(2000).setValue(p.description))));
+  if (cid.startsWith('editcfg_price_')) return i.showModal(new ModalBuilder().setCustomId(`edit_price_${pid2}`).setTitle('Editar Valor').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_price').setLabel('Novo valor').setStyle(1).setRequired(true).setMaxLength(60).setValue(p.price))));
+  if (cid.startsWith('editcfg_color_')) return i.showModal(new ModalBuilder().setCustomId(`edit_color_${pid2}`).setTitle('Editar Cor').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_color').setLabel('Cor (HEX ou nome)').setStyle(1).setRequired(false).setMaxLength(32).setValue(p.color))));
+  if (cid.startsWith('editcfg_delete_')) { deletePanel(pid2); return i.reply({content:`🗑️ Painel #${pid2} "${p.title}" deletado.`,ephemeral:true}); }
+}
 
-  const action = i.values[0];
+// ═══ SELECT MENUS ═══
+async function handleEditSelect(i) {
+  const val = i.values[0];
+  if (!val.startsWith('panel_')) return safeReply(i, 'Seleção inválida.');
+  const panelId = parseInt(val.replace('panel_', ''));
+  const p = getPanel(panelId);
+  if (!p) return safeReply(i, 'Painel não encontrado.');
+  await showEditMenu(i, p);
+}
 
-  if (action === 'delete') {
-    const { deletePanel } = require('../utils/sellManager');
-    deletePanel(panelId);
-    return i.reply({ content: `🗑️ Painel #${panelId} "${panel.title}" deletado.`, ephemeral: true });
-  }
-
-  if (action === 'edit_items') {
-    return i.showModal(
-      new (require('discord.js').ModalBuilder)().setCustomId(`edit_items_${panelId}`).setTitle('Substituir Estoque')
-        .addComponents(new (require('discord.js').ActionRowBuilder)().addComponents(
-          new (require('discord.js').TextInputBuilder)().setCustomId('replace_items').setLabel('Novos itens (um por linha, --)').setPlaceholder('item1\n--\nitem2').setStyle(2).setRequired(false).setMaxLength(2000)
-        ))
-    );
-  }
+async function handleDeleteMulti(i) {
+  const ids = i.values.filter(v => v.startsWith('delete_')).map(v => parseInt(v.replace('delete_', '')));
+  if (!ids.length) return safeReply(i, 'Nenhum selecionado.');
+  let deleted = 0;
+  for (const id of ids) { if (deletePanel(id)) deleted++; }
+  await i.reply({content:`🗑️ ${deleted} painel(is) deletado(s).`,ephemeral:true});
 }
