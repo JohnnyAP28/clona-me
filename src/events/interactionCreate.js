@@ -18,6 +18,16 @@ function downloadImage(url) {
   });
 }
 
+// Helper: re-show config panel after each edit (keeps session alive)
+async function refreshConfig(i, panel) {
+  const embed = buildPanelEmbed(panel);
+  embed.setTitle('🔧 Configurar Painel — Preview');
+  embed.setDescription(
+    (panel.description || '') + '\n\n**Use os botões abaixo para configurar.**\nQuando pronto, clique em **Publicar Agora**.'
+  );
+  await i.update({ embeds: [embed], components: sell.buildConfigRows(panel) });
+}
+
 module.exports = {
   name: 'interactionCreate',
   async execute(interaction) {
@@ -58,7 +68,7 @@ module.exports = {
       if (cid.startsWith('paycancel_')) return handlePayCancel(interaction,cid);
       if (cid.startsWith('paycopy_')) return handlePayCopy(interaction,cid);
       if (cid.startsWith('staffverify_')) return handleStaffVerify(interaction,cid);
-      if (cid.startsWith('staffdeliver_')) return handleStaffDeliver(interaction,cid);
+      if (cid.startsWith('staffdeliver_')) return handleStaffVerify(interaction,cid);
       if (cid.startsWith('staffreject_')) return handleStaffReject(interaction,cid);
       if (cid.startsWith('editcfg_')) return handleEditConfigBtn(interaction,cid);
       if (cid.startsWith('editcfg_update_')) return handleEditUpdate(interaction,cid);
@@ -77,12 +87,41 @@ async function safeReply(i, m) { try { if (i.replied||i.deferred) await i.follow
 function pid(cid) { return parseInt(cid.split('_').pop()); }
 async function handleCmdModal(i, name) { const cmd=i.client.commands.get(name); if(!cmd?.handleModal) return safeReply(i,'Erro interno.'); try{await cmd.handleModal(i);}catch(e){console.error(`[ERRO] ${name}:`,e.message); await safeReply(i,`Erro: ${e.message.slice(0,200)}`);} }
 
-// ═══ SELL MODALS ═══
-async function handleStock(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.lockStock=i.fields.getTextInputValue('stock_lock').trim().toLowerCase().startsWith('s'); const raw=i.fields.getTextInputValue('stock_items').trim(); const items=raw.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean).filter(s=>s!=='--').join(' -- ').split('--').map(s=>s.trim()).filter(Boolean); if(items.length){addStock(p.id,items); await i.reply({content:`✅ ${items.length} itens.${p.lockStock?' 🔒 Travado.':''}`,ephemeral:true});} else await i.reply({content:'Nenhum item.',ephemeral:true}); }
-async function handleDelivery(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.deliveryType=i.fields.getTextInputValue('delivery_type').trim().toLowerCase()==='auto'?'auto':'manual'; await i.reply({content:`✅ ${p.deliveryType==='auto'?'⚡ Automática':'👤 Manual'}`,ephemeral:true}); }
-async function handleIcon(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.iconUrl=i.fields.getTextInputValue('icon_url').trim(); await i.reply({content:p.iconUrl?'✅ Ícone atualizado.':'✅ Ícone removido.',ephemeral:true}); }
-async function handleBanner(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.bannerUrl=i.fields.getTextInputValue('banner_url').trim(); await i.reply({content:p.bannerUrl?'✅ Banner atualizado.':'✅ Banner removido.',ephemeral:true}); }
-async function handleDisplay(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.showStock=i.fields.getTextInputValue('show_stock').trim().toLowerCase().startsWith('s'); p.showSold=i.fields.getTextInputValue('show_sold').trim().toLowerCase().startsWith('s'); await i.reply({content:`✅ Estoque: ${p.showStock?'visível':'oculto'} • Vendidos: ${p.showSold?'visível':'oculto'}`,ephemeral:true}); }
+// ═══ SELL MODALS — agora re-exibem o painel de config ═══
+async function handleStock(i, cid) {
+  const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.');
+  p.lockStock=i.fields.getTextInputValue('stock_lock').trim().toLowerCase().startsWith('s');
+  const raw=i.fields.getTextInputValue('stock_items').trim();
+  const items=raw.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean).filter(s=>s!=='--').join(' -- ').split('--').map(s=>s.trim()).filter(Boolean);
+  if(items.length) addStock(p.id,items);
+  await refreshConfig(i, p);
+}
+async function handleDelivery(i, cid) {
+  const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.');
+  p.deliveryType=i.fields.getTextInputValue('delivery_type').trim().toLowerCase()==='auto'?'auto':'manual';
+  await refreshConfig(i, p);
+}
+async function handleIcon(i, cid) {
+  const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.');
+  p.iconUrl=i.fields.getTextInputValue('icon_url').trim();
+  await refreshConfig(i, p);
+}
+async function handleBanner(i, cid) {
+  const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.');
+  p.bannerUrl=i.fields.getTextInputValue('banner_url').trim();
+  await refreshConfig(i, p);
+}
+async function handleDisplay(i, cid) {
+  const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.');
+  p.showStock=i.fields.getTextInputValue('show_stock').trim().toLowerCase().startsWith('s');
+  p.showSold=i.fields.getTextInputValue('show_sold').trim().toLowerCase().startsWith('s');
+  await refreshConfig(i, p);
+}
+async function handleThumbToggle(i, cid) {
+  const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.');
+  p.showThumbnail=i.values[0]!=='none';
+  await refreshConfig(i, p);
+}
 
 async function handleSellConfigBtn(i, cid) {
   const pid2=pid(cid); const p=getPanel(pid2); if(!p) return safeReply(i,'Painel expirado.');
@@ -92,7 +131,14 @@ async function handleSellConfigBtn(i, cid) {
   if(act==='icon') return i.showModal(sell.buildIconModal(pid2,p.iconUrl));
   if(act==='banner') return i.showModal(sell.buildBannerModal(pid2,p.bannerUrl));
   if(act==='display') return i.showModal(sell.buildDisplayModal(pid2,p));
-  if(act==='thumb'){p.showThumbnail=!p.showThumbnail; return i.reply({content:`✅ Thumb: ${p.showThumbnail?'ON':'OFF'}`,ephemeral:true});}
+  if(act==='thumb') {
+    return i.reply({content:'Escolha:',components:[new ActionRowBuilder().addComponents(
+      new StringSelectMenuBuilder().setCustomId(`sell_thumb_${pid2}`).setPlaceholder('Thumbnail').addOptions(
+        new StringSelectMenuOptionBuilder().setLabel('ON').setValue('top').setDefault(p.showThumbnail),
+        new StringSelectMenuOptionBuilder().setLabel('OFF').setValue('none').setDefault(!p.showThumbnail),
+      )
+    )],ephemeral:true});
+  }
   if(act==='preview'){const e=buildPanelEmbed(p); e.setTitle(`🔍 Preview — ${p.title}`); return i.reply({embeds:[e],ephemeral:true});}
   if(act==='pub'){
     if(!p.title||!p.price) return safeReply(i,'Preencha título e valor.');
@@ -104,93 +150,57 @@ async function handleSellConfigBtn(i, cid) {
     }catch(e){await i.followUp({content:`Erro: ${e.message}`,ephemeral:true});}
   }
 }
-async function handleThumbToggle(i, cid){const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.showThumbnail=i.values[0]!=='none'; await i.reply({content:`✅ Thumb: ${p.showThumbnail?'ON':'OFF'}`,ephemeral:true});}
 
-// ═══════════════════════════════════════════════
-//  FLUXO DE COMPRA (CORRIGIDO)
-// ═══════════════════════════════════════════════
-
+// ═══ FLUXO DE COMPRA ═══
 async function handlePurchaseStart(i, cid) {
   const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Indisponível.');
   if (!p.published) return safeReply(i, 'Painel não disponível.');
   const hasStock = p.lockStock || p.stock.some(s => !s.used);
   if (!hasStock) return safeReply(i, '❌ Estoque esgotado.');
   const config = require('../config');
-  const pixKey = config.pixKey || '(PIX não configurado pela staff)';
-
-  const pixEmbed = new EmbedBuilder()
-    .setTitle('💳 Pagamento — ' + p.title)
-    .setColor(0xF0B232)
-    .setDescription(
-      `**Produto:** ${p.title}\n` +
-      `**Valor:** ${p.price}\n` +
-      `**Entrega:** ${p.deliveryType === 'auto' ? '⚡ Automática (após confirmação)' : '👤 Manual'}\n\n` +
-      `**Chave PIX:**\n\`\`\`${pixKey}\`\`\`\n` +
-      `⚠️ Após pagar, clique em **"Já paguei"**. A staff verificará o comprovante e liberará o produto.`
-    )
-    .setFooter({ text: 'Pagamento verificado manualmente pela staff' });
+  const pixKey = config.pixKey || '(PIX não configurado)';
+  const pixEmbed = new EmbedBuilder().setTitle('💳 Pagamento — ' + p.title).setColor(0xF0B232)
+    .setDescription(`**Produto:** ${p.title}\n**Valor:** ${p.price}\n**Entrega:** ${p.deliveryType==='auto'?'⚡ Automática (após confirmação)':'👤 Manual'}\n\n**Chave PIX:**\n\`\`\`${pixKey}\`\`\`\n⚠️ Após pagar, clique em "Já paguei". A staff verificará e liberará.`)
+    .setFooter({text:'Pagamento verificado manualmente'});
   if (config.pixQrUrl) pixEmbed.setImage(config.pixQrUrl);
-
   const btns = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`paycopy_${p.id}`).setLabel('📋 Copiar PIX').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`payconfirm_${p.id}`).setLabel('✅ Já paguei').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`paycancel_${p.id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger),
   );
-  await i.reply({ embeds: [pixEmbed], components: [btns], ephemeral: true });
+  await i.reply({embeds:[pixEmbed],components:[btns],ephemeral:true});
 }
 
-// Copiar — envia a chave em texto puro, fácil de copiar
 async function handlePayCopy(i, cid) {
   const config = require('../config');
-  const pixKey = config.pixKey || 'PIX não configurado';
-  await i.reply({ content: pixKey, ephemeral: true });
+  await i.reply({ content: config.pixKey || 'PIX não configurado', ephemeral: true });
 }
 
-// Já paguei — NOTIFICA STAFF, NÃO entrega direto
 async function handlePayConfirm(i, cid) {
   const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
   await i.deferReply({ ephemeral: true });
-
-  // NUNCA entrega direto. Sempre exige verificação da staff.
   const buyerId = i.user.id;
-
-  // Notifica staff no canal do painel
   if (p.channelId) {
     try {
       const ch = i.client.channels.cache.get(p.channelId);
       if (ch) {
-        const staffEmbed = new EmbedBuilder()
-          .setTitle('🔔 Pagamento Pendente — Verificar')
-          .setColor(0xF0B232)
-          .setDescription(
-            `**Produto:** ${p.title}\n` +
-            `**Valor:** ${p.price}\n` +
-            `**Comprador:** <@${buyerId}> (${buyerId})\n` +
-            `**Entrega:** ${p.deliveryType === 'auto' ? '⚡ Automática' : '👤 Manual'}\n\n` +
-            `⚠️ Verifique o comprovante antes de confirmar.`
-          )
-          .setFooter({ text: `Painel #${p.id}` }).setTimestamp();
-
+        const staffEmbed = new EmbedBuilder().setTitle('🔔 Pagamento Pendente').setColor(0xF0B232)
+          .setDescription(`**Produto:** ${p.title}\n**Valor:** ${p.price}\n**Comprador:** <@${buyerId}>\n**Entrega:** ${p.deliveryType==='auto'?'⚡ Automática':'👤 Manual'}\n\n⚠️ Verifique antes de confirmar.`)
+          .setFooter({text:`Painel #${p.id}`}).setTimestamp();
         const staffBtns = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId(`staffverify_${p.id}_${buyerId}`).setLabel('✅ Confirmar Pagamento').setStyle(ButtonStyle.Success),
+          new ButtonBuilder().setCustomId(`staffverify_${p.id}_${buyerId}`).setLabel('✅ Confirmar').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`staffreject_${p.id}_${buyerId}`).setLabel('❌ Rejeitar').setStyle(ButtonStyle.Danger),
         );
-        await ch.send({ embeds: [staffEmbed], components: [staffBtns] });
+        await ch.send({embeds:[staffEmbed],components:[staffBtns]});
       }
     } catch (_) {}
   }
-
-  await i.followUp({
-    content: '✅ Pedido enviado! A staff verificará seu pagamento e liberará o produto em instantes.',
-    ephemeral: true,
-  });
+  await i.followUp({content:'✅ Pedido enviado! A staff verificará e liberará em instantes.',ephemeral:true});
 }
 
-// Staff confirma pagamento → entrega
+// Staff confirma → envia para DM do comprador
 async function handleStaffVerify(i, cid) {
-  if (!i.memberPermissions?.has('Administrator')) return safeReply(i, 'Apenas staff pode verificar pagamentos.');
-
-  // Parse: staffverify_PANELID_BUYERID
+  if (!i.memberPermissions?.has('Administrator')) return safeReply(i, 'Apenas staff.');
   const parts = cid.split('_');
   const panelId = parseInt(parts[1]);
   const buyerId = parts[2];
@@ -201,56 +211,64 @@ async function handleStaffVerify(i, cid) {
 
   const item = consumeStock(p.id);
   if (!item) {
-    await i.editReply({ content: '❌ Estoque esgotado.', embeds: [], components: [] });
+    await i.editReply({content:'❌ Estoque esgotado.',embeds:[],components:[]});
     return;
   }
 
-  // Atualiza painel publicado
+  // Atualiza painel
   if (p.published && p.messageId) {
     try {
       const ch = i.client.channels.cache.get(p.channelId);
-      const msg = await ch?.messages.fetch(p.messageId).catch(() => null);
-      if (msg) await msg.edit({ embeds: [buildPanelEmbed(p)], components: [buildPurchaseButton(p.id, p)] });
+      const msg = await ch?.messages.fetch(p.messageId).catch(()=>null);
+      if (msg) await msg.edit({embeds:[buildPanelEmbed(p)],components:[buildPurchaseButton(p.id,p)]});
     } catch (_) {}
   }
 
-  // Envia produto no chat (visível) mencionando o comprador
-  const deliveryEmbed = new EmbedBuilder()
-    .setTitle('🎁 Pagamento Confirmado — Produto Entregue')
-    .setColor(0x57f287)
-    .setDescription(`<@${buyerId}> seu pagamento foi confirmado!`)
-    .addFields({ name: '📦 Produto', value: `**${p.title}**` })
-    .addFields({ name: '📋 Conteúdo', value: item.slice(0, 1024) })
-    .setFooter({ text: `Venda #${p.soldCount} • Staff: ${i.user.username}` }).setTimestamp();
+  // ENVIA NA DM DO COMPRADOR
+  let dmSent = false;
+  try {
+    const buyer = await i.client.users.fetch(buyerId).catch(() => null);
+    if (buyer) {
+      const dmEmbed = new EmbedBuilder()
+        .setTitle('🎁 Produto Entregue!')
+        .setColor(0x57f287)
+        .setDescription(`**${p.title}**\n\nSeu pagamento foi confirmado! Aqui está seu produto:`)
+        .addFields({name:'📦 Conteúdo',value:item.slice(0,1024)})
+        .setFooter({text:`PRIMO Store • Obrigado por comprar!`}).setTimestamp();
+      await buyer.send({embeds:[dmEmbed]}).catch(() => {});
+      dmSent = true;
+    }
+  } catch (_) {}
 
-  await i.editReply({ content: `✅ Pagamento do painel #${p.id} confirmado. Produto entregue para <@${buyerId}>.`, embeds: [deliveryEmbed], components: [] });
+  const confirmEmbed = new EmbedBuilder()
+    .setTitle('✅ Pagamento Confirmado — Produto Entregue')
+    .setColor(0x57f287)
+    .setDescription(`**Produto:** ${p.title}\n**Comprador:** <@${buyerId}>\n**Entregue via:** ${dmSent ? '💬 DM' : '⚠️ DM indisponível (avise o comprador)'}\n\n\`\`\`${item.slice(0,1000)}\`\`\``)
+    .setFooter({text:`Venda #${p.soldCount} • Staff: ${i.user.username}`}).setTimestamp();
+
+  await i.editReply({embeds:[confirmEmbed],components:[]});
 }
 
-// Staff rejeita pagamento
 async function handleStaffReject(i, cid) {
   if (!i.memberPermissions?.has('Administrator')) return safeReply(i, 'Apenas staff.');
   const parts = cid.split('_');
   const panelId = parseInt(parts[1]);
   const buyerId = parts[2];
-  await i.update({ content: `❌ Pagamento do painel #${panelId} de <@${buyerId}> foi **rejeitado** pela staff.`, embeds: [], components: [] });
+  await i.update({content:`❌ Pagamento do painel #${panelId} de <@${buyerId}> rejeitado.`,embeds:[],components:[]});
 }
 
-async function handlePayCancel(i, cid) { await i.update({ content: '❌ Compra cancelada.', embeds: [], components: [] }); }
-
-// Staff deliver (mantido para compatibilidade)
-async function handleStaffDeliver(i, cid) {
-  return handleStaffVerify(i, cid);
-}
+async function handlePayCancel(i, cid) { await i.update({content:'❌ Compra cancelada.',embeds:[],components:[]}); }
 async function handlePurchase(i, cid) { return handlePurchaseStart(i, cid); }
 
 // ═══ EDIT ═══
-async function handleReplaceStock(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); const raw=i.fields.getTextInputValue('replace_items').trim(); if(raw){p.stock=[]; const items=raw.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean).filter(s=>s!=='--').join(' -- ').split('--').map(s=>s.trim()).filter(Boolean); addStock(p.id,items); await i.reply({content:`✅ ${items.length} itens.`,ephemeral:true});} else await i.reply({content:'Estoque mantido.',ephemeral:true}); }
-async function handleEditTitle(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.title=i.fields.getTextInputValue('new_title').trim(); await i.reply({content:`✅ **${p.title}**`,ephemeral:true}); }
+async function handleReplaceStock(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); const raw=i.fields.getTextInputValue('replace_items').trim(); if(raw){p.stock=[]; const items=raw.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean).filter(s=>s!=='--').join(' -- ').split('--').map(s=>s.trim()).filter(Boolean); addStock(p.id,items);} await i.reply({content:'✅ Estoque atualizado.',ephemeral:true}); }
+async function handleEditTitle(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.title=i.fields.getTextInputValue('new_title').trim(); await i.reply({content:`✅ Título: **${p.title}**`,ephemeral:true}); }
 async function handleEditDesc(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.description=i.fields.getTextInputValue('new_desc').trim(); await i.reply({content:'✅ Descrição atualizada.',ephemeral:true}); }
-async function handleEditPrice(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.price=i.fields.getTextInputValue('new_price').trim(); await i.reply({content:`✅ **${p.price}**`,ephemeral:true}); }
-async function handleEditColor(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.color=resolveColor(i.fields.getTextInputValue('new_color').trim()); await i.reply({content:`✅ ${p.color}`,ephemeral:true}); }
+async function handleEditPrice(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.price=i.fields.getTextInputValue('new_price').trim(); await i.reply({content:`✅ Valor: **${p.price}**`,ephemeral:true}); }
+async function handleEditColor(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.color=resolveColor(i.fields.getTextInputValue('new_color').trim()); await i.reply({content:`✅ Cor: ${p.color}`,ephemeral:true}); }
+
 async function handleEditConfigBtn(i, cid) { const pid2=pid(cid),p=getPanel(pid2); if(!p) return safeReply(i,'Painel expirado.'); if(cid.startsWith('editcfg_stock_'))return i.showModal(sell.buildStockModal(pid2)); if(cid.startsWith('editcfg_deliv_'))return i.showModal(sell.buildDeliveryModal(pid2,p.deliveryType)); if(cid.startsWith('editcfg_icon_'))return i.showModal(sell.buildIconModal(pid2,p.iconUrl)); if(cid.startsWith('editcfg_banner_'))return i.showModal(sell.buildBannerModal(pid2,p.bannerUrl)); if(cid.startsWith('editcfg_display_'))return i.showModal(sell.buildDisplayModal(pid2,p)); if(cid.startsWith('editcfg_thumb_')){p.showThumbnail=!p.showThumbnail; return i.reply({content:`✅ Thumb: ${p.showThumbnail?'ON':'OFF'}`,ephemeral:true});} if(cid.startsWith('editcfg_items_'))return i.showModal(new ModalBuilder().setCustomId(`edit_items_${pid2}`).setTitle('Substituir Estoque').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('replace_items').setLabel('Novos itens (um por linha, --)').setPlaceholder('item1\n--\nitem2').setStyle(2).setRequired(false).setMaxLength(2000)))); if(cid.startsWith('editcfg_title_'))return i.showModal(new ModalBuilder().setCustomId(`edit_title_${pid2}`).setTitle('Editar Título').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_title').setLabel('Novo título').setStyle(1).setRequired(true).setMaxLength(256).setValue(p.title)))); if(cid.startsWith('editcfg_desc_'))return i.showModal(new ModalBuilder().setCustomId(`edit_desc_${pid2}`).setTitle('Editar Descrição').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_desc').setLabel('Nova descrição').setStyle(2).setRequired(true).setMaxLength(2000).setValue(p.description)))); if(cid.startsWith('editcfg_price_'))return i.showModal(new ModalBuilder().setCustomId(`edit_price_${pid2}`).setTitle('Editar Valor').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_price').setLabel('Novo valor').setStyle(1).setRequired(true).setMaxLength(60).setValue(p.price)))); if(cid.startsWith('editcfg_color_'))return i.showModal(new ModalBuilder().setCustomId(`edit_color_${pid2}`).setTitle('Editar Cor').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_color').setLabel('Cor (HEX ou nome)').setStyle(1).setRequired(false).setMaxLength(32).setValue(p.color)))); if(cid.startsWith('editcfg_delete_')){deletePanel(pid2); return i.reply({content:`🗑️ Painel #${pid2} "${p.title}" deletado.`,ephemeral:true});} }
-async function handleEditUpdate(i, cid) { const pid2=pid(cid),p=getPanel(pid2); if(!p||!p.published) return safeReply(i,'Painel não publicado.'); await i.deferReply({ephemeral:true}); try{const ch=i.client.channels.cache.get(p.channelId); if(!ch) return i.followUp({content:'Canal não encontrado.',ephemeral:true}); const msg=await ch.messages.fetch(p.messageId).catch(()=>null); if(!msg) return i.followUp({content:'Mensagem original perdida. Republique.',ephemeral:true}); await msg.edit({embeds:[buildPanelEmbed(p)],components:[buildPurchaseButton(p.id,p)]}); await i.followUp({content:`✅ Painel #${p.id} atualizado.`,ephemeral:true});} catch(e){await i.followUp({content:`Erro: ${e.message}`,ephemeral:true});} }
+async function handleEditUpdate(i, cid) { const pid2=pid(cid),p=getPanel(pid2); if(!p||!p.published) return safeReply(i,'Painel não publicado.'); await i.deferReply({ephemeral:true}); try{const ch=i.client.channels.cache.get(p.channelId); if(!ch) return i.followUp({content:'Canal não encontrado.',ephemeral:true}); const msg=await ch.messages.fetch(p.messageId).catch(()=>null); if(!msg) return i.followUp({content:'Mensagem original perdida.',ephemeral:true}); await msg.edit({embeds:[buildPanelEmbed(p)],components:[buildPurchaseButton(p.id,p)]}); await i.followUp({content:`✅ Painel #${p.id} atualizado.`,ephemeral:true});} catch(e){await i.followUp({content:`Erro: ${e.message}`,ephemeral:true});} }
 async function handleEditSelect(i) { const val=i.values[0]; if(!val.startsWith('panel_')) return safeReply(i,'Inválido.'); const panelId=parseInt(val.replace('panel_','')); const p=getPanel(panelId); if(!p) return safeReply(i,'Não encontrado.'); await showEditMenu(i,p); }
 async function handleDeleteMulti(i) { const ids=i.values.filter(v=>v.startsWith('delete_')).map(v=>parseInt(v.replace('delete_',''))); if(!ids.length) return safeReply(i,'Nenhum.'); let d=0; for(const id of ids){if(deletePanel(id))d++;} await i.reply({content:`🗑️ ${d} painel(is) deletado(s).`,ephemeral:true}); }
 
