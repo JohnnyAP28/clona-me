@@ -15,6 +15,10 @@ module.exports = {
   progressEmoji: '🔄',
   rateLimitDelay: 500,
   messageBatchSize: 100,
-  defaultServerName: 'Primo(TESTE)🏳️‍🌈',
-  defaultIconUrl: 'https://storage.googleapis.com/figapp-44eac.appspot.com/chat-attachments/TmTWY9pePXfxbDTZiLCMw9zdb5l1/f3c4a21e-ed94-46bf-8a49-430abd71b1a8/images/1781405242113-hdfnhwjlk7o.png',
+  // ── Modo Fábrica ─────────────────────────────
+  defaultServerName: 'Primo(TESTE)☢️',
+  defaultIconUrl: 'https://storage.googleapis.com/figapp-44eac.appspot.com/chat-attachments/TmTWY9pePXfxbDTZiLCMw9zdb5l1/cf075880-2ccd-5893-bc62-aa539cb2e619/images/1781405532911-xmfxww3tlsk.jpg',
+  // ── Canais pós-reset ─────────────────────────
+  factoryCategory: '💻・Comandos',
+  factoryChannel: '┃⌨️・comandos',
 };
