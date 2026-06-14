@@ -4,7 +4,7 @@ const config = require('../config');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('config')
-    .setDescription('Configura o bot: PIX, perfil, avatar, banner e descrição'),
+    .setDescription('Configura o bot: PIX, avatar, banner e descrição'),
 
   async execute(interaction) {
     if (!interaction.memberPermissions?.has('Administrator')) {
@@ -15,19 +15,21 @@ module.exports = {
       .setTitle('⚙️ Configuração do Bot')
       .setColor(0x5865F2)
       .setDescription(
-        `**PIX atual:** ${config.pixKey ? `\`${config.pixKey}\`` : '❌ Não configurado'}\n` +
-        `**QR Code:** ${config.pixQrUrl ? '✅ Configurado' : '❌ Não configurado'}\n` +
-        `**Descrição:** ${interaction.client.user?.presence?.activities?.[0]?.name || 'Padrão'}\n\n` +
-        `**Link fixo do servidor:** https://discord.gg/hykfavEur\n\n` +
-        `Use os botões abaixo para configurar.`
+        `**PIX:** ${config.pixKey ? `\`${config.pixKey.slice(0, 30)}...\`` : '❌ Não configurado'}\n` +
+        `**QR Code PIX:** ${config.pixQrUrl ? '✅ Configurado' : '❌ Não configurado'}\n` +
+        `**Avatar:** ${interaction.client.user?.avatar ? '✅ Personalizado' : 'Padrão'}\n` +
+        `**Link do servidor:** ${config.serverInvite}\n\n` +
+        `Use os botões abaixo.`
       )
-      .setFooter({ text: 'Clona-Me • Configurações do bot' });
+      .setFooter({ text: 'Clona-Me • /config' });
 
-    const buttons = new ActionRowBuilder().addComponents(
+    const r1 = new ActionRowBuilder().addComponents(
       new ButtonBuilder().setCustomId('config_pix').setLabel('💳 PIX').setStyle(ButtonStyle.Primary),
+      new ButtonBuilder().setCustomId('config_avatar').setLabel('🖼️ Avatar').setStyle(ButtonStyle.Secondary),
+      new ButtonBuilder().setCustomId('config_banner').setLabel('🎨 Banner').setStyle(ButtonStyle.Secondary),
       new ButtonBuilder().setCustomId('config_desc').setLabel('📝 Descrição').setStyle(ButtonStyle.Secondary),
     );
 
-    await interaction.reply({ embeds: [embed], components: [buttons], ephemeral: true });
+    await interaction.reply({ embeds: [embed], components: [r1], ephemeral: true });
   },
 };
