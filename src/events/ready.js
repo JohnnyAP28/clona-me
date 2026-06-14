@@ -6,7 +6,7 @@ module.exports = {
     console.log(`[ON] Presente em ${client.guilds.cache.size} servidor(es).`);
 
     client.user.setPresence({
-      activities: [{ name: '/clone para começar', type: 2 }],
+      activities: [{ name: '/venda para criar produtos', type: 2 }],
       status: 'online',
     });
   },
