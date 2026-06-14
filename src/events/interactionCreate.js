@@ -1,4 +1,4 @@
-const { EmbedBuilder, ModalBuilder, ActionRowBuilder, TextInputBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+const { EmbedBuilder, ModalBuilder, ActionRowBuilder, TextInputBuilder, ButtonBuilder, ButtonStyle, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, PermissionFlagsBits, ChannelType } = require('discord.js');
 const { getPanel, buildPanelEmbed, buildPurchaseButton, addStock, consumeStock, resolveColor, listPanels, deletePanel } = require('../utils/sellManager');
 const sell = require('../commands/sell');
 const { showEditMenu } = require('../commands/edit');
@@ -18,7 +18,7 @@ function downloadImage(url) {
   });
 }
 
-// Re-exibe painel de config após cada modal (auto-save visual)
+// Re-exibe painel de config após cada modal
 async function refreshConfig(i, panel) {
   const embed = buildPanelEmbed(panel);
   embed.setTitle('🔧 Configurar Painel — Preview');
@@ -85,7 +85,7 @@ async function safeReply(i, m) { try { if (i.replied||i.deferred) await i.follow
 function pid(cid) { return parseInt(cid.split('_').pop()); }
 async function handleCmdModal(i, name) { const cmd=i.client.commands.get(name); if(!cmd?.handleModal) return safeReply(i,'Erro interno.'); try{await cmd.handleModal(i);}catch(e){console.error(`[ERRO] ${name}:`,e.message); await safeReply(i,`Erro: ${e.message.slice(0,200)}`);} }
 
-// ═══ SELL MODALS — auto-save: re-exibem painel ═══
+// ═══ SELL MODALS ═══
 async function handleStock(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.lockStock=i.fields.getTextInputValue('stock_lock').trim().toLowerCase().startsWith('s'); const raw=i.fields.getTextInputValue('stock_items').trim(); const items=raw.split(/[\n\r]+/).map(s=>s.trim()).filter(Boolean).filter(s=>s!=='--').join(' -- ').split('--').map(s=>s.trim()).filter(Boolean); if(items.length) addStock(p.id,items); await refreshConfig(i,p); }
 async function handleDelivery(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.deliveryType=i.fields.getTextInputValue('delivery_type').trim().toLowerCase()==='auto'?'auto':'manual'; await refreshConfig(i,p); }
 async function handleIcon(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.iconUrl=i.fields.getTextInputValue('icon_url').trim(); await refreshConfig(i,p); }
@@ -106,7 +106,7 @@ async function handleSellConfigBtn(i, cid) {
   if(act==='pub'){
     if(!p.title||!p.price) return safeReply(i,'Preencha título e valor.');
     await i.deferReply({ephemeral:true});
-    try{const ch=i.client.channels.cache.get(p.channelId); if(!ch) return i.followUp({content:'❌ Canal não encontrado. A staff pode ter deletado o canal.',ephemeral:true});
+    try{const ch=i.client.channels.cache.get(p.channelId); if(!ch) return i.followUp({content:'❌ Canal não encontrado.',ephemeral:true});
       const emb=buildPanelEmbed(p); const btn=buildPurchaseButton(p.id,p);
       const msg=await ch.send({embeds:[emb],components:[btn]}); p.messageId=msg.id; p.published=true;
       await i.followUp({content:`✅ Painel #${p.id} publicado em ${ch}.`,ephemeral:true});
@@ -114,52 +114,158 @@ async function handleSellConfigBtn(i, cid) {
   }
 }
 
-// ═══ FLUXO DE COMPRA ═══
+// ═══════════════════════════════════════════════
+//  FLUXO DE COMPRA COM CARRINHO
+// ═══════════════════════════════════════════════
+
+// Carrinhos ativos: { panelId: { buyerId: channelId } }
+const activeCarts = new Map();
+
+async function createCartChannel(guild, buyer, panel) {
+  try {
+    // Cria categoria #Carrinhos se não existir
+    let cartCategory = guild.channels.cache.find(c => c.type === 4 && c.name === '🛒・Carrinhos');
+    if (!cartCategory) {
+      cartCategory = await guild.channels.create({
+        name: '🛒・Carrinhos',
+        type: 4,
+        permissionOverwrites: [
+          { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: guild.members.me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels] },
+        ],
+      });
+    }
+
+    const channelName = `🛒・carrinho-${buyer.username}`.slice(0, 32);
+    const channel = await guild.channels.create({
+      name: channelName,
+      type: 0,
+      parent: cartCategory.id,
+      permissionOverwrites: [
+        { id: guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+        { id: buyer.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+        { id: guild.members.me.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ManageChannels, PermissionFlagsBits.ReadMessageHistory] },
+      ],
+    });
+
+    return channel;
+  } catch (e) {
+    console.error('[CART] Erro ao criar canal:', e.message);
+    return null;
+  }
+}
+
+async function closeCartChannel(guild, buyerId) {
+  try {
+    const channel = guild.channels.cache.find(c => c.name.includes(`carrinho-`) && c.permissionOverwrites.cache.has(buyerId));
+    if (channel) {
+      // Remove acesso do comprador
+      await channel.permissionOverwrites.edit(buyerId, { ViewChannel: false });
+      // Deleta o canal após 5 segundos
+      setTimeout(async () => {
+        try { await channel.delete('Compra finalizada'); } catch (_) {}
+      }, 5000);
+    }
+  } catch (_) {}
+}
+
 async function handlePurchaseStart(i, cid) {
   const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Indisponível.');
   if (!p.published) return safeReply(i, 'Painel não disponível.');
   const hasStock = p.lockStock || p.stock.some(s => !s.used);
   if (!hasStock) return safeReply(i, '❌ Estoque esgotado.');
+
   const config = require('../config');
   const pixKey = config.pixKey || '(não configurado)';
-  const pixEmbed = new EmbedBuilder().setTitle('💳 Pagamento — ' + p.title).setColor(0xF0B232)
-    .setDescription(`**Produto:** ${p.title}\n**Valor:** ${p.price}\n**Entrega:** ${p.deliveryType==='auto'?'⚡ Automática':'👤 Manual'}\n\n**Chave PIX:**\n\`\`\`${pixKey}\`\`\`\n⚠️ Após pagar, clique em "Já paguei".`)
-    .setFooter({text:'Verificação manual pela staff'});
-  if (config.pixQrUrl) pixEmbed.setImage(config.pixQrUrl);
-  const btns = new ActionRowBuilder().addComponents(
+  const guild = i.guild;
+
+  await i.deferReply({ ephemeral: true });
+
+  // Cria canal do carrinho
+  const cartChannel = await createCartChannel(guild, i.user, p);
+  if (!cartChannel) return i.followUp({ content: '❌ Erro ao criar canal do carrinho. Tente novamente.', ephemeral: true });
+
+  activeCarts.set(p.id, { buyerId: i.user.id, channelId: cartChannel.id });
+
+  // Envia mensagem no carrinho
+  const cartEmbed = new EmbedBuilder()
+    .setTitle('🛒 Carrinho de Compras')
+    .setColor(0x5865F2)
+    .setDescription(
+      `${i.user}, continue sua compra aqui!\n\n` +
+      `**Produto:** ${p.title}\n**Valor:** ${p.price}\n**Entrega:** ${p.deliveryType === 'auto' ? '⚡ Automática' : '👤 Manual'}\n\n` +
+      `**Chave PIX:**\n\`\`\`${pixKey}\`\`\``
+    )
+    .setFooter({ text: 'Após pagar, clique em "Já paguei"' });
+  if (config.pixQrUrl) cartEmbed.setImage(config.pixQrUrl);
+
+  const cartBtns = new ActionRowBuilder().addComponents(
     new ButtonBuilder().setCustomId(`paycopy_${p.id}`).setLabel('📋 Copiar PIX').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`payconfirm_${p.id}`).setLabel('✅ Já paguei').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`paycancel_${p.id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger),
   );
-  await i.reply({embeds:[pixEmbed],components:[btns],ephemeral:true});
+
+  try {
+    await cartChannel.send({ embeds: [cartEmbed], components: [cartBtns] });
+  } catch (_) {}
+
+  // Responde no chat original com atalho para o carrinho
+  const dmLink = `https://discord.com/channels/@me`;
+  await i.followUp({
+    content: `🛒 **Carrinho criado!** Continue sua compra no canal: ${cartChannel}\n\n📬 Ou depois que a staff confirmar, seu produto chegará no seu [DM](${dmLink}).`,
+    ephemeral: true,
+  });
 }
+
 async function handlePayCopy(i, cid) {
   const config = require('../config');
   await i.reply({ content: config.pixKey || 'PIX não configurado', ephemeral: true });
 }
+
 async function handlePayConfirm(i, cid) {
   const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
   await i.deferReply({ ephemeral: true });
   const buyerId = i.user.id;
-  if (p.channelId) {
+
+  // Notifica staff no canal do carrinho
+  const cart = activeCarts.get(p.id);
+  if (cart && cart.channelId) {
     try {
-      const ch = i.client.channels.cache.get(p.channelId);
+      const ch = i.guild.channels.cache.get(cart.channelId);
       if (ch) {
         const staffEmbed = new EmbedBuilder().setTitle('🔔 Pagamento Pendente').setColor(0xF0B232)
           .setDescription(`**Produto:** ${p.title}\n**Valor:** ${p.price}\n**Comprador:** <@${buyerId}>\n\n⚠️ Verifique antes de confirmar.`)
-          .setFooter({text:`Painel #${p.id}`}).setTimestamp();
+          .setFooter({ text: `Painel #${p.id}` }).setTimestamp();
         const staffBtns = new ActionRowBuilder().addComponents(
           new ButtonBuilder().setCustomId(`staffverify_${p.id}_${buyerId}`).setLabel('✅ Confirmar').setStyle(ButtonStyle.Success),
           new ButtonBuilder().setCustomId(`staffreject_${p.id}_${buyerId}`).setLabel('❌ Rejeitar').setStyle(ButtonStyle.Danger),
         );
-        await ch.send({embeds:[staffEmbed],components:[staffBtns]});
+        await ch.send({ embeds: [staffEmbed], components: [staffBtns] });
       }
     } catch (_) {}
+  } else {
+    // Fallback: notifica no canal do painel
+    if (p.channelId) {
+      try {
+        const ch = i.client.channels.cache.get(p.channelId);
+        if (ch) {
+          const staffEmbed = new EmbedBuilder().setTitle('🔔 Pagamento Pendente').setColor(0xF0B232)
+            .setDescription(`**Produto:** ${p.title}\n**Valor:** ${p.price}\n**Comprador:** <@${buyerId}>\n\n⚠️ Verifique antes de confirmar.`)
+            .setFooter({ text: `Painel #${p.id}` }).setTimestamp();
+          const staffBtns = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`staffverify_${p.id}_${buyerId}`).setLabel('✅ Confirmar').setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId(`staffreject_${p.id}_${buyerId}`).setLabel('❌ Rejeitar').setStyle(ButtonStyle.Danger),
+          );
+          await ch.send({ embeds: [staffEmbed], components: [staffBtns] });
+        }
+      } catch (_) {}
+    }
   }
-  await i.followUp({content:'✅ Pedido enviado! A staff verificará e liberará em instantes.',ephemeral:true});
+
+  await i.followUp({ content: '✅ Pagamento registrado! A staff verificará e liberará em instantes.', ephemeral: true });
 }
 
-// Staff confirma → DM + mensagem bonita no canal
+// Staff confirma → DM + fecha carrinho
 async function handleStaffVerify(i, cid) {
   if (!i.memberPermissions?.has('Administrator')) return safeReply(i, 'Apenas staff.');
   const parts = cid.split('_');
@@ -171,52 +277,77 @@ async function handleStaffVerify(i, cid) {
   await i.deferUpdate();
 
   const item = consumeStock(p.id);
-  if (!item) { await i.editReply({content:'❌ Estoque esgotado.',embeds:[],components:[]}); return; }
+  if (!item) { await i.editReply({ content: '❌ Estoque esgotado.', embeds: [], components: [] }); return; }
 
   // Atualiza painel
   if (p.published && p.messageId) {
     try {
       const ch = i.client.channels.cache.get(p.channelId);
-      const msg = await ch?.messages.fetch(p.messageId).catch(()=>null);
-      if (msg) await msg.edit({embeds:[buildPanelEmbed(p)],components:[buildPurchaseButton(p.id,p)]});
+      const msg = await ch?.messages.fetch(p.messageId).catch(() => null);
+      if (msg) await msg.edit({ embeds: [buildPanelEmbed(p)], components: [buildPurchaseButton(p.id, p)] });
     } catch (_) {}
   }
 
   // Envia na DM do comprador
+  const dmLink = `https://discord.com/channels/@me`;
   let dmSent = false;
   try {
     const buyer = await i.client.users.fetch(buyerId).catch(() => null);
     if (buyer) {
       const dmEmbed = new EmbedBuilder().setTitle('🎁 Produto Entregue!').setColor(0x57f287)
         .setDescription(`**${p.title}**\n\nSeu pagamento foi confirmado! Aqui está seu produto:`)
-        .addFields({name:'📦 Conteúdo',value:item.slice(0,1024)})
-        .setFooter({text:'PRIMO Store • Obrigado por comprar!'}).setTimestamp();
-      await buyer.send({embeds:[dmEmbed]}).catch(() => {});
+        .addFields({ name: '📦 Conteúdo', value: item.slice(0, 1024) })
+        .setFooter({ text: 'PRIMO Store • Obrigado por comprar!' }).setTimestamp();
+      await buyer.send({ embeds: [dmEmbed] }).catch(() => {});
       dmSent = true;
     }
   } catch (_) {}
 
-  // Mensagem bonita no canal com atalho para DM
-  const dmLink = `https://discord.com/channels/@me`;
-  const channelMsg = await i.editReply({
+  // Fecha o carrinho
+  await closeCartChannel(i.guild, buyerId);
+  activeCarts.delete(p.id);
+
+  // Mensagem no canal do staff com atalho DM
+  await i.editReply({
     content: null,
-    embeds: [new EmbedBuilder()
-      .setTitle('🎉 Parabéns pela compra! 🎉')
-      .setColor(0x57f287)
-      .setDescription(`<@${buyerId}>, seu produto foi enviado para seu **DM privado**: [📬 Abrir DM](${dmLink})`)
-      .setFooter({text:`Painel #${p.id} • Confirmado por ${i.user.username}`}).setTimestamp()
+    embeds: [
+      new EmbedBuilder()
+        .setTitle('🎉 Parabéns pela compra! 🎉')
+        .setColor(0x57f287)
+        .setDescription(
+          `<@${buyerId}>, seu produto foi entregue com sucesso!\n\n` +
+          `📬 **Acesse seu DM:** [Clique aqui para abrir](${dmLink})\n` +
+          `🛒 O carrinho foi fechado automaticamente.`
+        )
+        .setFooter({ text: `Painel #${p.id} • Confirmado por ${i.user.username}` }).setTimestamp()
     ],
     components: [],
   });
 }
+
 async function handleStaffReject(i, cid) {
   if (!i.memberPermissions?.has('Administrator')) return safeReply(i, 'Apenas staff.');
   const parts = cid.split('_');
   const panelId = parseInt(parts[1]);
   const buyerId = parts[2];
-  await i.update({content:`❌ Pagamento do painel #${panelId} de <@${buyerId}> rejeitado.`,embeds:[],components:[]});
+
+  // Fecha carrinho também
+  await closeCartChannel(i.guild, buyerId);
+  activeCarts.delete(panelId);
+
+  // Devolve estoque se tinha consumido (rollback não necessário pois só consome no verify)
+  await i.update({ content: `❌ Pagamento do painel #${panelId} de <@${buyerId}> rejeitado. Carrinho fechado.`, embeds: [], components: [] });
 }
-async function handlePayCancel(i, cid) { await i.update({content:'❌ Compra cancelada.',embeds:[],components:[]}); }
+
+async function handlePayCancel(i, cid) {
+  const panelId = pid(cid);
+  const cart = activeCarts.get(panelId);
+  if (cart) {
+    await closeCartChannel(i.guild, cart.buyerId);
+    activeCarts.delete(panelId);
+  }
+  await i.update({ content: '❌ Compra cancelada. Carrinho fechado.', embeds: [], components: [] });
+}
 async function handlePurchase(i, cid) { return handlePurchaseStart(i, cid); }
 
 // ═══ EDIT ═══
@@ -226,41 +357,20 @@ async function handleEditDesc(i, cid) { const p=getPanel(pid(cid)); if(!p) retur
 async function handleEditPrice(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.price=i.fields.getTextInputValue('new_price').trim(); await i.reply({content:`✅ Valor: **${p.price}**`,ephemeral:true}); }
 async function handleEditColor(i, cid) { const p=getPanel(pid(cid)); if(!p) return safeReply(i,'Painel expirado.'); p.color=resolveColor(i.fields.getTextInputValue('new_color').trim()); await i.reply({content:`✅ Cor: ${p.color}`,ephemeral:true}); }
 async function handleEditConfigBtn(i, cid) { const pid2=pid(cid),p=getPanel(pid2); if(!p) return safeReply(i,'Painel expirado.'); if(cid.startsWith('editcfg_stock_'))return i.showModal(sell.buildStockModal(pid2)); if(cid.startsWith('editcfg_deliv_'))return i.showModal(sell.buildDeliveryModal(pid2,p.deliveryType)); if(cid.startsWith('editcfg_icon_'))return i.showModal(sell.buildIconModal(pid2,p.iconUrl)); if(cid.startsWith('editcfg_banner_'))return i.showModal(sell.buildBannerModal(pid2,p.bannerUrl)); if(cid.startsWith('editcfg_display_'))return i.showModal(sell.buildDisplayModal(pid2,p)); if(cid.startsWith('editcfg_thumb_')){p.showThumbnail=!p.showThumbnail; return i.reply({content:`✅ Thumb: ${p.showThumbnail?'ON':'OFF'}`,ephemeral:true});} if(cid.startsWith('editcfg_items_'))return i.showModal(new ModalBuilder().setCustomId(`edit_items_${pid2}`).setTitle('Substituir Estoque').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('replace_items').setLabel('Novos itens (um por linha, --)').setPlaceholder('item1\n--\nitem2').setStyle(2).setRequired(false).setMaxLength(2000)))); if(cid.startsWith('editcfg_title_'))return i.showModal(new ModalBuilder().setCustomId(`edit_title_${pid2}`).setTitle('Editar Título').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_title').setLabel('Novo título').setStyle(1).setRequired(true).setMaxLength(256).setValue(p.title)))); if(cid.startsWith('editcfg_desc_'))return i.showModal(new ModalBuilder().setCustomId(`edit_desc_${pid2}`).setTitle('Editar Descrição').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_desc').setLabel('Nova descrição').setStyle(2).setRequired(true).setMaxLength(2000).setValue(p.description)))); if(cid.startsWith('editcfg_price_'))return i.showModal(new ModalBuilder().setCustomId(`edit_price_${pid2}`).setTitle('Editar Valor').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_price').setLabel('Novo valor').setStyle(1).setRequired(true).setMaxLength(60).setValue(p.price)))); if(cid.startsWith('editcfg_color_'))return i.showModal(new ModalBuilder().setCustomId(`edit_color_${pid2}`).setTitle('Editar Cor').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_color').setLabel('Cor (HEX ou nome)').setStyle(1).setRequired(false).setMaxLength(32).setValue(p.color)))); if(cid.startsWith('editcfg_delete_')){deletePanel(pid2); return i.reply({content:`🗑️ Painel #${pid2} "${p.title}" deletado.`,ephemeral:true});} }
-
-// ═══ EDIT UPDATE — corrigido ═══
 async function handleEditUpdate(i, cid) {
-  const pid2 = pid(cid);
-  const p = getPanel(pid2);
-  if (!p) return safeReply(i, 'Painel não encontrado. IDs foram resetados? Use /editar para ver os disponíveis.');
-  if (!p.published) return safeReply(i, '⚠️ Este painel ainda não foi publicado. Use "Publicar Agora" primeiro.');
-  if (!p.messageId) return safeReply(i, '⚠️ ID da mensagem perdido. Republique o painel com "Publicar Agora".');
-
-  await i.deferReply({ ephemeral: true });
-  try {
-    const ch = i.client.channels.cache.get(p.channelId);
-    if (!ch) return i.followUp({ content: '❌ Canal não encontrado. Pode ter sido deletado.', ephemeral: true });
-
-    const msg = await ch.messages.fetch(p.messageId).catch(() => null);
-    if (!msg) {
-      p.messageId = null;
-      p.published = false;
-      return i.followUp({ content: '❌ Mensagem original não encontrada (pode ter sido deletada). Use "Publicar Agora" para recriar.', ephemeral: true });
-    }
-
-    const emb = buildPanelEmbed(p);
-    const btn = buildPurchaseButton(p.id, p);
-    await msg.edit({ embeds: [emb], components: [btn] });
-    await i.followUp({ content: `✅ Painel #${p.id} atualizado com sucesso!`, ephemeral: true });
-  } catch (e) {
-    console.error('[EDIT UPDATE]', e.message);
-    await i.followUp({ content: `❌ Erro: ${e.message}`, ephemeral: true });
-  }
+  const pid2=pid(cid),p=getPanel(pid2); if(!p) return safeReply(i,'Painel não encontrado.'); if(!p.published) return safeReply(i,'⚠️ Não publicado. Use Publicar Agora.'); if(!p.messageId) return safeReply(i,'⚠️ ID perdido. Republique.');
+  await i.deferReply({ephemeral:true});
+  try{const ch=i.client.channels.cache.get(p.channelId); if(!ch) return i.followUp({content:'❌ Canal não encontrado.',ephemeral:true});
+    const msg=await ch.messages.fetch(p.messageId).catch(()=>null);
+    if(!msg){p.messageId=null; p.published=false; return i.followUp({content:'❌ Mensagem original perdida. Use Publicar Agora.',ephemeral:true});}
+    await msg.edit({embeds:[buildPanelEmbed(p)],components:[buildPurchaseButton(p.id,p)]});
+    await i.followUp({content:`✅ Painel #${p.id} atualizado!`,ephemeral:true});
+  }catch(e){await i.followUp({content:`❌ Erro: ${e.message}`,ephemeral:true});}
 }
-
 async function handleEditSelect(i) { const val=i.values[0]; if(!val.startsWith('panel_')) return safeReply(i,'Inválido.'); const panelId=parseInt(val.replace('panel_','')); const p=getPanel(panelId); if(!p) return safeReply(i,'Não encontrado.'); await showEditMenu(i,p); }
 async function handleDeleteMulti(i) { const ids=i.values.filter(v=>v.startsWith('delete_')).map(v=>parseInt(v.replace('delete_',''))); if(!ids.length) return safeReply(i,'Nenhum.'); let d=0; for(const id of ids){if(deletePanel(id))d++;} await i.reply({content:`🗑️ ${d} painel(is) deletado(s).`,ephemeral:true}); }
 
-// ═══ /config — agora com re-exibição (auto-save) ═══
+// ═══ /config ═══
 async function handleConfigBtn(i, cid) {
   const act=cid.replace('config_','');
   if(act==='pix') return i.showModal(new ModalBuilder().setCustomId('config_pix_main').setTitle('Configurar PIX').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pix_key').setLabel('Chave PIX').setPlaceholder('CPF/CNPJ/email/telefone').setStyle(1).setRequired(true).setMaxLength(100)),new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pix_qr').setLabel('URL do QR Code (opcional)').setPlaceholder('https://i.imgur.com/...').setStyle(1).setRequired(false).setMaxLength(400))));
@@ -269,24 +379,11 @@ async function handleConfigBtn(i, cid) {
   if(act==='banner') return i.showModal(new ModalBuilder().setCustomId('config_banner_main').setTitle('Banner do Bot').addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('banner_url').setLabel('URL da imagem do banner').setPlaceholder('https://i.imgur.com/...').setStyle(1).setRequired(true).setMaxLength(400))));
 }
 async function handleConfigPix(i) {
-  const key=i.fields.getTextInputValue('pix_key').trim();
-  const qr=i.fields.getTextInputValue('pix_qr')?.trim()||'';
-  const config=require('../config');
-  config.pixKey=key; config.pixQrUrl=qr;
-  // Re-exibe o menu de config com dados atualizados
-  const embed = new EmbedBuilder().setTitle('⚙️ Configuração do Bot').setColor(0x5865F2)
-    .setDescription(`**PIX:** \`${key.slice(0,30)}...\`\n**QR Code:** ${qr?'✅ Configurado':'❌ Não configurado'}\n**Link:** ${config.serverInvite}\n\nConfiguração salva!`);
-  await i.update({ embeds: [embed], components: [new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId('config_pix').setLabel('💳 PIX').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId('config_avatar').setLabel('🖼️ Avatar').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('config_banner').setLabel('🎨 Banner').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId('config_desc').setLabel('📝 Descrição').setStyle(ButtonStyle.Secondary),
-  )] });
+  const key=i.fields.getTextInputValue('pix_key').trim(); const qr=i.fields.getTextInputValue('pix_qr')?.trim()||'';
+  const config=require('../config'); config.pixKey=key; config.pixQrUrl=qr;
+  const embed=new EmbedBuilder().setTitle('⚙️ Configuração do Bot').setColor(0x5865F2).setDescription(`**PIX:** \`${key.slice(0,30)}...\`\n**QR Code:** ${qr?'✅ Configurado':'❌ Não configurado'}\n**Link:** ${config.serverInvite}\n\n✅ Salvo!`);
+  await i.update({embeds:[embed],components:[new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('config_pix').setLabel('💳 PIX').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('config_avatar').setLabel('🖼️ Avatar').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('config_banner').setLabel('🎨 Banner').setStyle(ButtonStyle.Secondary),new ButtonBuilder().setCustomId('config_desc').setLabel('📝 Descrição').setStyle(ButtonStyle.Secondary))]});
 }
-async function handleConfigDesc(i) {
-  const desc=i.fields.getTextInputValue('bot_desc')?.trim()||'Clona-Me • discord.gg/hykfavEur';
-  try{await i.client.user.setPresence({activities:[{name:desc,type:4}]});}catch(e){console.error('[CONFIG] Desc:',e.message);}
-  await i.reply({content:'✅ Descrição do bot atualizada.',ephemeral:true});
-}
+async function handleConfigDesc(i) { const desc=i.fields.getTextInputValue('bot_desc')?.trim()||'Clona-Me • discord.gg/hykfavEur'; try{await i.client.user.setPresence({activities:[{name:desc,type:4}]});}catch(e){console.error('[CONFIG] Desc:',e.message);} await i.reply({content:'✅ Descrição do bot atualizada.',ephemeral:true}); }
 async function handleConfigAvatar(i) { const url=i.fields.getTextInputValue('avatar_url').trim(); if(!url) return safeReply(i,'URL obrigatória.'); await i.deferReply({ephemeral:true}); try{const buf=await downloadImage(url); await i.client.user.setAvatar(buf); await i.followUp({content:'✅ Avatar do bot atualizado!',ephemeral:true});} catch(e){await i.followUp({content:`❌ Erro: ${e.message}`,ephemeral:true});} }
 async function handleConfigBanner(i) { const url=i.fields.getTextInputValue('banner_url').trim(); if(!url) return safeReply(i,'URL obrigatória.'); await i.deferReply({ephemeral:true}); try{const buf=await downloadImage(url); await i.client.user.setBanner(buf); await i.followUp({content:'✅ Banner do bot atualizado!',ephemeral:true});} catch(e){await i.followUp({content:`❌ Erro: ${e.message}`,ephemeral:true});} }
