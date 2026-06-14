@@ -6,17 +6,16 @@ const config = require('../config');
  * - Remove todos os canais e categorias
  * - Define o nome padrão
  * - Define o ícone padrão
+ * - Cria a categoria "💻・Comandos" com canal "⌨️・comandos"
  *
  * @param {Guild} guild - Servidor a ser resetado
- * @returns {Promise<{name: string, iconSet: boolean, rolesDeleted: number, channelsDeleted: number, errors: number}>}
+ * @returns {Promise<{name: string, iconSet: boolean, rolesDeleted: number, channelsDeleted: number, errors: number, factoryChannelCreated: boolean}>}
  */
 async function cleanServer(guild) {
-  const result = { name: config.defaultServerName, iconSet: false, rolesDeleted: 0, channelsDeleted: 0, errors: 0 };
+  const result = { name: config.defaultServerName, iconSet: false, rolesDeleted: 0, channelsDeleted: 0, errors: 0, factoryChannelCreated: false };
 
   // ── Deletar canais (categorias primeiro, depois canais) ──
   const channels = await guild.channels.fetch();
-
-  // Deletar categorias primeiro (canais dentro delas somem junto)
   const categories = [...channels.values()].filter(c => c.type === 4);
   for (const category of categories) {
     try {
@@ -29,7 +28,6 @@ async function cleanServer(guild) {
     }
   }
 
-  // Depois canais restantes (que não estavam em categorias deletadas)
   const remainingChannels = await guild.channels.fetch();
   for (const [id, channel] of remainingChannels) {
     try {
@@ -37,7 +35,6 @@ async function cleanServer(guild) {
       result.channelsDeleted++;
       await sleep(config.rateLimitDelay);
     } catch (err) {
-      // Canal já deletado ou sem permissão — ignorar
       if (err.code !== 10003 && err.code !== 50013) {
         console.error(`[ERRO] Falha ao deletar canal "${channel.name}":`, err.message);
         result.errors++;
@@ -71,31 +68,9 @@ async function cleanServer(guild) {
   // ── Restaurar ícone ──
   if (config.defaultIconUrl) {
     try {
-      // Compatível com Node.js 16+ (usa https nativo se fetch não existir)
-      let buffer;
-      if (typeof fetch !== 'undefined') {
-        const response = await fetch(config.defaultIconUrl);
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const arrayBuffer = await response.arrayBuffer();
-        buffer = Buffer.from(arrayBuffer);
-      } else {
-        const https = require('node:https');
-        const http = require('node:http');
-        const mod = config.defaultIconUrl.startsWith('https') ? https : http;
-        buffer = await new Promise((resolve, reject) => {
-          mod.get(config.defaultIconUrl, (res) => {
-            if (res.statusCode < 200 || res.statusCode >= 300) {
-              reject(new Error(`HTTP ${res.statusCode}`));
-              return;
-            }
-            const chunks = [];
-            res.on('data', c => chunks.push(c));
-            res.on('end', () => resolve(Buffer.concat(chunks)));
-          }).on('error', reject);
-        });
-      }
-      const base64 = buffer.toString('base64');
-      const dataUri = `data:image/png;base64,${base64}`;
+      const iconBuffer = await downloadImage(config.defaultIconUrl);
+      const base64 = iconBuffer.toString('base64');
+      const dataUri = `data:image/jpeg;base64,${base64}`;
       await guild.setIcon(dataUri, 'Clona-Me — Restauração padrão');
       result.iconSet = true;
     } catch (err) {
@@ -104,7 +79,54 @@ async function cleanServer(guild) {
     }
   }
 
+  // ── Criar categoria e canal de fábrica ──
+  try {
+    const factoryCategory = await guild.channels.create({
+      name: config.factoryCategory,
+      type: 4, // CategoryChannel
+      reason: 'Clona-Me — Modo fábrica',
+    });
+    await sleep(config.rateLimitDelay);
+
+    await guild.channels.create({
+      name: config.factoryChannel,
+      type: 0, // TextChannel
+      parent: factoryCategory.id,
+      topic: 'Use /resetar para formatar o servidor. Use /venda para criar um painel de vendas.',
+      reason: 'Clona-Me — Modo fábrica',
+    });
+    result.factoryChannelCreated = true;
+  } catch (err) {
+    console.error('[ERRO] Falha ao criar canais de fábrica:', err.message);
+    result.errors++;
+  }
+
   return result;
+}
+
+/**
+ * Baixa uma imagem como Buffer, com fallback para Node.js < 18
+ */
+async function downloadImage(url) {
+  if (typeof fetch !== 'undefined') {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+  // Fallback para Node.js antigo
+  const mod = url.startsWith('https') ? require('node:https') : require('node:http');
+  return new Promise((resolve, reject) => {
+    mod.get(url, (res) => {
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        reject(new Error(`HTTP ${res.statusCode}`));
+        return;
+      }
+      const chunks = [];
+      res.on('data', c => chunks.push(c));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    }).on('error', reject);
+  });
 }
 
 function sleep(ms) {
