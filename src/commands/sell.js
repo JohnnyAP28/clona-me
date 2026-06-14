@@ -1,5 +1,5 @@
 const { SlashCommandBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, EmbedBuilder, ButtonBuilder, ButtonStyle, ChannelType, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
-const { createPanel, getPanel, buildPanelEmbed, buildPurchaseButton, addStock } = require('../utils/sellManager');
+const { createPanel, getPanel, buildPanelEmbed, buildPurchaseButton, addStock, resolveColor } = require('../utils/sellManager');
 
 // ── /venda ─────────────────────────────────────────────
 module.exports = {
@@ -7,18 +7,18 @@ module.exports = {
     .setName('venda')
     .setDescription('Cria um painel de venda completo')
     .addChannelOption(opt =>
-      opt.setName('canal')
-        .setDescription('Canal onde o painel será publicado')
-        .setRequired(true)
-        .addChannelTypes(ChannelType.GuildText)
+      opt.setName('canal').setDescription('Canal onde o painel será publicado').setRequired(true).addChannelTypes(ChannelType.GuildText)
+    )
+    .addAttachmentOption(opt =>
+      opt.setName('icone').setDescription('Upload do ícone/thumbnail').setRequired(false)
+    )
+    .addAttachmentOption(opt =>
+      opt.setName('banner').setDescription('Upload do banner/imagem').setRequired(false)
     ),
 
   async execute(interaction) {
     if (!interaction.memberPermissions?.has('Administrator')) {
-      return interaction.reply({
-        content: 'Você precisa de permissão de **Administrador** para usar este comando.',
-        ephemeral: true,
-      });
+      return interaction.reply({ content: 'Você precisa de permissão de **Administrador**.', ephemeral: true });
     }
 
     const channel = interaction.options.getChannel('canal');
@@ -26,7 +26,14 @@ module.exports = {
       return interaction.reply({ content: 'Selecione um canal de texto válido.', ephemeral: true });
     }
 
+    const iconAtt = interaction.options.getAttachment('icone');
+    const bannerAtt = interaction.options.getAttachment('banner');
+
     const panel = createPanel(interaction.guildId, interaction.user.id, channel.id);
+
+    // Salva anexos se fornecidos
+    if (iconAtt) panel.iconUrl = iconAtt.url;
+    if (bannerAtt) panel.bannerUrl = bannerAtt.url;
 
     const modal = new ModalBuilder()
       .setCustomId(`sell_modal_${panel.id}`)
@@ -38,7 +45,7 @@ module.exports = {
       .setPlaceholder('Ex: 🔥 Assinatura Netflix Premium 12 meses')
       .setStyle(TextInputStyle.Short)
       .setRequired(true)
-      .setMaxLength(180);
+      .setMaxLength(256);
 
     const descInput = new TextInputBuilder()
       .setCustomId('sell_desc')
@@ -46,7 +53,7 @@ module.exports = {
       .setPlaceholder('Descreva o produto, benefícios, garantia...')
       .setStyle(TextInputStyle.Paragraph)
       .setRequired(true)
-      .setMaxLength(1800);
+      .setMaxLength(2000);
 
     const priceInput = new TextInputBuilder()
       .setCustomId('sell_price')
@@ -66,12 +73,12 @@ module.exports = {
 
     const colorInput = new TextInputBuilder()
       .setCustomId('sell_color')
-      .setLabel('Cor da embed (HEX)')
-      .setPlaceholder('#8A2BE2')
+      .setLabel('Cor (HEX ou nome: roxo/azul/vermelho/verde...)')
+      .setPlaceholder('#8A2BE2 ou roxo')
       .setStyle(TextInputStyle.Short)
       .setRequired(false)
       .setValue('#8A2BE2')
-      .setMaxLength(16);
+      .setMaxLength(32);
 
     modal.addComponents(
       new ActionRowBuilder().addComponents(titleInput),
@@ -85,184 +92,104 @@ module.exports = {
   },
 
   async handleModal(interaction) {
-    // Extrai o panel ID do customId
     const panelId = parseInt(interaction.customId.replace('sell_modal_', ''));
     const panel = getPanel(panelId);
+    if (!panel) return interaction.reply({ content: 'Painel não encontrado. Use /venda novamente.', ephemeral: true });
 
-    if (!panel) {
-      return interaction.reply({ content: 'Painel não encontrado. Use /venda novamente.', ephemeral: true });
-    }
-
-    // Salva dados do modal
     panel.title = interaction.fields.getTextInputValue('sell_title').trim();
     panel.description = interaction.fields.getTextInputValue('sell_desc').trim();
     panel.price = interaction.fields.getTextInputValue('sell_price').trim();
     panel.externalPrice = interaction.fields.getTextInputValue('sell_extprice').trim();
     const colorVal = interaction.fields.getTextInputValue('sell_color').trim();
-    if (colorVal) panel.color = colorVal;
+    if (colorVal) panel.color = resolveColor(colorVal);
 
-    // Responde com o painel de configuração
     const embed = buildPanelEmbed(panel);
     embed.setTitle('🔧 Configurar Painel — Preview');
     embed.setDescription(
       panel.description + '\n\n' +
-      '**Use os botões abaixo para configurar o painel.**\n' +
+      '**Use os botões abaixo para configurar.**\n' +
       'Quando estiver pronto, clique em **Publicar Agora**.'
     );
 
-    await interaction.reply({
-      embeds: [embed],
-      components: buildConfigRows(panel),
-      ephemeral: true,
-    });
+    await interaction.reply({ embeds: [embed], components: buildConfigRows(panel), ephemeral: true });
   },
 };
 
-// ── Builder Views ──────────────────────────────────────
-
+// ── Config Rows ────────────────────────────────────────
 function buildConfigRows(panel) {
-  const row1 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`sell_config_stock_${panel.id}`).setLabel('📦 Estoque').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`sell_config_delivery_${panel.id}`).setLabel('📨 Entrega').setStyle(ButtonStyle.Primary),
-    new ButtonBuilder().setCustomId(`sell_config_icon_${panel.id}`).setLabel('🖼️ Ícone').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`sell_config_banner_${panel.id}`).setLabel('🎨 Banner').setStyle(ButtonStyle.Secondary),
+  const r1 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`sellcfg_stock_${panel.id}`).setLabel('📦 Estoque').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`sellcfg_deliv_${panel.id}`).setLabel('📨 Entrega').setStyle(ButtonStyle.Primary),
+    new ButtonBuilder().setCustomId(`sellcfg_icon_${panel.id}`).setLabel('🖼️ Ícone').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`sellcfg_banner_${panel.id}`).setLabel('🎨 Banner').setStyle(ButtonStyle.Secondary),
   );
-  const row2 = new ActionRowBuilder().addComponents(
-    new ButtonBuilder().setCustomId(`sell_config_display_${panel.id}`).setLabel('👁️ Exibição').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`sell_config_thumb_${panel.id}`).setLabel('📌 Thumbnail').setStyle(ButtonStyle.Secondary),
-    new ButtonBuilder().setCustomId(`sell_config_publish_${panel.id}`).setLabel('🚀 Publicar Agora').setStyle(ButtonStyle.Success),
-    new ButtonBuilder().setCustomId(`sell_config_preview_${panel.id}`).setLabel('👀 Preview').setStyle(ButtonStyle.Secondary),
+  const r2 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`sellcfg_display_${panel.id}`).setLabel('👁️ Exibição').setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`sellcfg_thumb_${panel.id}`).setLabel(`📌 Thumb: ${panel.showThumbnail ? 'ON' : 'OFF'}`).setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder().setCustomId(`sellcfg_pub_${panel.id}`).setLabel('🚀 Publicar').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`sellcfg_preview_${panel.id}`).setLabel('👀 Preview').setStyle(ButtonStyle.Secondary),
   );
-  return [row1, row2];
+  return [r1, r2];
 }
 
-// ── Modal de Estoque ───────────────────────────────────
+// ── Sub-Modals (exportados para interactionCreate) ─────
+
 function buildStockModal(panelId) {
-  return new ModalBuilder()
-    .setCustomId(`sell_stock_${panelId}`)
-    .setTitle('Adicionar Estoque')
+  return new ModalBuilder().setCustomId(`sell_stock_${panelId}`).setTitle('Adicionar Estoque')
     .addComponents(
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('stock_items')
-          .setLabel('Itens (separados por --)')
-          .setPlaceholder('login:senha1 -- login:senha2 -- login:senha3')
-          .setStyle(TextInputStyle.Paragraph)
-          .setRequired(true)
-          .setMaxLength(2000)
+        new TextInputBuilder().setCustomId('stock_items').setLabel('Itens (um por linha, separados por --)')
+          .setPlaceholder('item1\n--\nitem2\n--\nitem3').setStyle(TextInputStyle.Paragraph).setRequired(true).setMaxLength(2000)
       ),
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('stock_lock')
-          .setLabel('Travar estoque? (sim/não)')
-          .setPlaceholder('não')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setValue('não')
-          .setMaxLength(3)
-      )
+        new TextInputBuilder().setCustomId('stock_lock').setLabel('Travar estoque? (sim/não)')
+          .setPlaceholder('não').setStyle(TextInputStyle.Short).setRequired(false).setValue('não').setMaxLength(3)
+      ),
     );
 }
 
-// ── Modal de Entrega ───────────────────────────────────
-function buildDeliveryModal(panelId, currentType) {
-  return new ModalBuilder()
-    .setCustomId(`sell_delivery_${panelId}`)
-    .setTitle('Configurar Entrega')
+function buildDeliveryModal(panelId, current) {
+  return new ModalBuilder().setCustomId(`sell_delivery_${panelId}`).setTitle('Configurar Entrega')
     .addComponents(
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('delivery_type')
-          .setLabel('Tipo (manual/auto)')
-          .setPlaceholder(currentType || 'manual')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true)
-          .setValue(currentType || 'manual')
-          .setMaxLength(6)
-      )
+        new TextInputBuilder().setCustomId('delivery_type').setLabel('Tipo (manual/auto)')
+          .setPlaceholder('manual').setStyle(TextInputStyle.Short).setRequired(true).setValue(current || 'manual').setMaxLength(6)
+      ),
     );
 }
 
-// ── Modal de Ícone ─────────────────────────────────────
 function buildIconModal(panelId, currentUrl) {
-  return new ModalBuilder()
-    .setCustomId(`sell_icon_${panelId}`)
-    .setTitle('Ícone / Thumbnail')
+  return new ModalBuilder().setCustomId(`sell_icon_${panelId}`).setTitle('Ícone / Thumbnail')
     .addComponents(
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('icon_url')
-          .setLabel('URL do ícone')
-          .setPlaceholder('https://i.imgur.com/...')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setValue(currentUrl || '')
-          .setMaxLength(400)
-      )
+        new TextInputBuilder().setCustomId('icon_url').setLabel('URL do ícone (ou use upload no /venda)')
+          .setPlaceholder('https://i.imgur.com/...').setStyle(TextInputStyle.Short).setRequired(false).setValue(currentUrl || '').setMaxLength(400)
+      ),
     );
 }
 
-// ── Modal de Banner ────────────────────────────────────
 function buildBannerModal(panelId, currentUrl) {
-  return new ModalBuilder()
-    .setCustomId(`sell_banner_${panelId}`)
-    .setTitle('Banner / Imagem')
+  return new ModalBuilder().setCustomId(`sell_banner_${panelId}`).setTitle('Banner / Imagem')
     .addComponents(
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('banner_url')
-          .setLabel('URL do banner')
-          .setPlaceholder('https://i.imgur.com/...')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setValue(currentUrl || '')
-          .setMaxLength(400)
-      )
+        new TextInputBuilder().setCustomId('banner_url').setLabel('URL do banner (ou use upload no /venda)')
+          .setPlaceholder('https://i.imgur.com/...').setStyle(TextInputStyle.Short).setRequired(false).setValue(currentUrl || '').setMaxLength(400)
+      ),
     );
 }
 
-// ── Modal de Exibição ──────────────────────────────────
 function buildDisplayModal(panelId, panel) {
-  return new ModalBuilder()
-    .setCustomId(`sell_display_${panelId}`)
-    .setTitle('Configurar Exibição')
+  return new ModalBuilder().setCustomId(`sell_display_${panelId}`).setTitle('Configurar Exibição')
     .addComponents(
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('show_stock')
-          .setLabel('Mostrar estoque? (sim/não)')
-          .setPlaceholder('sim')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setValue(panel.showStock ? 'sim' : 'não')
-          .setMaxLength(3)
+        new TextInputBuilder().setCustomId('show_stock').setLabel('Mostrar estoque? (sim/não)')
+          .setPlaceholder('sim').setStyle(TextInputStyle.Short).setRequired(false).setValue(panel.showStock ? 'sim' : 'não').setMaxLength(3)
       ),
       new ActionRowBuilder().addComponents(
-        new TextInputBuilder()
-          .setCustomId('show_sold')
-          .setLabel('Mostrar vendidos? (sim/não)')
-          .setPlaceholder('não')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(false)
-          .setValue(panel.showSold ? 'sim' : 'não')
-          .setMaxLength(3)
-      )
+        new TextInputBuilder().setCustomId('show_sold').setLabel('Mostrar vendidos? (sim/não)')
+          .setPlaceholder('não').setStyle(TextInputStyle.Short).setRequired(false).setValue(panel.showSold ? 'sim' : 'não').setMaxLength(3)
+      ),
     );
-}
-
-// ── Select de Posição Thumbnail ────────────────────────
-function buildThumbSelect(panelId, current) {
-  return new ActionRowBuilder().addComponents(
-    new StringSelectMenuBuilder()
-      .setCustomId(`sell_thumb_${panelId}`)
-      .setPlaceholder('Posição do thumbnail')
-      .addOptions(
-        new StringSelectMenuOptionBuilder().setLabel('Topo').setValue('top').setDescription('Imagem no topo do embed').setDefault(current === 'top'),
-        new StringSelectMenuOptionBuilder().setLabel('Meio').setValue('middle').setDescription('Imagem abaixo do preço').setDefault(current === 'middle'),
-        new StringSelectMenuOptionBuilder().setLabel('Fim').setValue('bottom').setDescription('Imagem no final do embed').setDefault(current === 'bottom'),
-        new StringSelectMenuOptionBuilder().setLabel('Sem thumbnail').setValue('none').setDescription('Não mostrar ícone').setDefault(current === 'none'),
-      )
-  );
 }
 
 module.exports.buildStockModal = buildStockModal;
@@ -270,5 +197,4 @@ module.exports.buildDeliveryModal = buildDeliveryModal;
 module.exports.buildIconModal = buildIconModal;
 module.exports.buildBannerModal = buildBannerModal;
 module.exports.buildDisplayModal = buildDisplayModal;
-module.exports.buildThumbSelect = buildThumbSelect;
 module.exports.buildConfigRows = buildConfigRows;
