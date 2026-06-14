@@ -1,6 +1,7 @@
 module.exports = {
   name: 'interactionCreate',
   async execute(interaction) {
+    // ── Slash Commands ──────────────────────────────────
     if (interaction.isChatInputCommand()) {
       const command = interaction.client.commands.get(interaction.commandName);
       if (!command) {
@@ -23,30 +24,55 @@ module.exports = {
       }
     }
 
+    // ── Modal Submits ───────────────────────────────────
     if (interaction.isModalSubmit()) {
       const modalMap = {
-        clone_modal: 'clone',
-        clean_modal: 'clean',
+        'clone_modal': 'clone',
+        'clean_modal': 'clean',
       };
 
       const commandName = modalMap[interaction.customId];
-      if (commandName) {
-        const command = interaction.client.commands.get(commandName);
-        if (command && command.handleModal) {
-          try {
-            await command.handleModal(interaction);
-          } catch (error) {
-            console.error('[ERRO] Modal handle:', error);
-            const reply = {
-              content: 'Ocorreu um erro ao processar o formulário.',
-              ephemeral: true,
-            };
-            if (interaction.replied || interaction.deferred) {
-              await interaction.followUp(reply);
-            } else {
-              await interaction.reply(reply);
-            }
+
+      if (!commandName) {
+        // Modal desconhecido — responde para não deixar o usuário esperando
+        console.warn(`[AVISO] Modal desconhecido: ${interaction.customId}`);
+        try {
+          await interaction.reply({
+            content: '❌ Formulário não reconhecido. Tente usar o comando novamente.',
+            ephemeral: true,
+          });
+        } catch (_) {}
+        return;
+      }
+
+      const command = interaction.client.commands.get(commandName);
+      if (!command || !command.handleModal) {
+        console.error(`[ERRO] Comando "${commandName}" não tem handleModal`);
+        try {
+          await interaction.reply({
+            content: '❌ Erro interno. O comando não possui manipulador de formulário.',
+            ephemeral: true,
+          });
+        } catch (_) {}
+        return;
+      }
+
+      try {
+        await command.handleModal(interaction);
+      } catch (error) {
+        console.error('[ERRO] Modal handle:', error);
+        const reply = {
+          content: 'Ocorreu um erro ao processar o formulário.',
+          ephemeral: true,
+        };
+        try {
+          if (interaction.replied || interaction.deferred) {
+            await interaction.followUp(reply);
+          } else {
+            await interaction.reply(reply);
           }
+        } catch (_) {
+          // Interação expirou
         }
       }
     }
