@@ -35,14 +35,21 @@ module.exports = {
       if (cid.startsWith('edit_desc_')) return handleEditDesc(interaction, cid);
       if (cid.startsWith('edit_price_')) return handleEditPrice(interaction, cid);
       if (cid.startsWith('edit_color_')) return handleEditColor(interaction, cid);
+      if (cid.startsWith('config_pix_')) return handleConfigPix(interaction, cid);
+      if (cid.startsWith('config_desc_')) return handleConfigDesc(interaction, cid);
     }
 
     // ═══ BUTTONS ═══
     if (interaction.isButton()) {
       const cid = interaction.customId;
       if (cid.startsWith('sellcfg_')) return handleSellConfigBtn(interaction, cid);
-      if (cid.startsWith('buy_')) return handlePurchase(interaction, cid);
+      if (cid.startsWith('buy_')) return handlePurchaseStart(interaction, cid);
+      if (cid.startsWith('payconfirm_')) return handlePayConfirm(interaction, cid);
+      if (cid.startsWith('paycancel_')) return handlePayCancel(interaction, cid);
+      if (cid.startsWith('staffdeliver_')) return handleStaffDeliver(interaction, cid);
       if (cid.startsWith('editcfg_')) return handleEditConfigBtn(interaction, cid);
+      if (cid.startsWith('editcfg_update_')) return handleEditUpdate(interaction, cid);
+      if (cid.startsWith('config_')) return handleConfigBtn(interaction, cid);
     }
 
     // ═══ SELECT MENUS ═══
@@ -125,21 +132,134 @@ async function handleThumbToggle(i, cid) {
   await i.reply({content:`✅ Thumb: ${p.showThumbnail?'ON':'OFF'}`,ephemeral:true});
 }
 
-// ═══ PURCHASE ═══
-async function handlePurchase(i, cid) {
-  const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Indisponível.');
-  await i.deferReply({ephemeral:true});
-  const item = consumeStock(p.id);
-  if (!item) return i.followUp({content:'❌ Estoque esgotado. Avise a staff.',ephemeral:true});
-  if (p.published && p.messageId) {
-    try { const ch=i.client.channels.cache.get(p.channelId); const msg=await ch?.messages.fetch(p.messageId).catch(()=>null);
-      if(msg) await msg.edit({embeds:[buildPanelEmbed(p)],components:[buildPurchaseButton(p.id,p)]}); } catch(_){}
+// ═══════════════════════════════════════════════
+//  FLUXO DE COMPRA — PASSO 1: Mostrar PIX
+// ═══════════════════════════════════════════════
+
+async function handlePurchaseStart(i, cid) {
+  const p = getPanel(pid(cid));
+  if (!p) return safeReply(i, 'Indisponível.');
+  if (!p.published) return safeReply(i, 'Este painel não está mais ativo.');
+
+  // Verifica se tem estoque
+  const hasStock = p.lockStock || p.stock.some(s => !s.used);
+  if (!hasStock) return safeReply(i, '❌ Estoque esgotado.');
+
+  const config = require('../config');
+
+  const pixEmbed = new EmbedBuilder()
+    .setTitle('💳 Pagamento — ' + p.title)
+    .setColor(0xF0B232)
+    .setDescription(
+      `**Produto:** ${p.title}\n` +
+      `**Valor:** ${p.price}\n` +
+      `**Entrega:** ${p.deliveryType === 'auto' ? '⚡ Automática' : '👤 Manual'}\n\n` +
+      `**Chave PIX para pagamento:**\n\`\`\`${config.pixKey || 'PIX não configurado pela staff'}\`\`\`\n` +
+      (config.pixQrUrl ? '' : '\n⚠️ O QR Code ainda não foi configurado.')
+    )
+    .setFooter({ text: 'Após pagar, clique em "Já paguei" para confirmar' });
+
+  if (config.pixQrUrl) pixEmbed.setImage(config.pixQrUrl);
+
+  const buttons = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`payconfirm_${p.id}`).setLabel('✅ Já paguei').setStyle(ButtonStyle.Success),
+    new ButtonBuilder().setCustomId(`paycancel_${p.id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger),
+  );
+
+  await i.reply({ embeds: [pixEmbed], components: [buttons], ephemeral: true });
+}
+
+// ═══ FLUXO DE COMPRA — PASSO 2: Confirmar pagamento ═══
+
+async function handlePayConfirm(i, cid) {
+  const p = getPanel(pid(cid));
+  if (!p) return safeReply(i, 'Painel expirado.');
+
+  await i.deferReply({ ephemeral: true });
+
+  if (p.deliveryType === 'auto') {
+    // Entrega automática — consome estoque e entrega na hora
+    const item = consumeStock(p.id);
+    if (!item) return i.followUp({ content: '❌ Estoque esgotado durante o pagamento. Avise a staff.', ephemeral: true });
+
+    // Atualiza painel publicado
+    if (p.published && p.messageId) {
+      try {
+        const ch = i.client.channels.cache.get(p.channelId);
+        const msg = await ch?.messages.fetch(p.messageId).catch(() => null);
+        if (msg) await msg.edit({ embeds: [buildPanelEmbed(p)], components: [buildPurchaseButton(p.id, p)] });
+      } catch (_) {}
+    }
+
+    const emb = new EmbedBuilder()
+      .setTitle('🎁 Pagamento Confirmado — Entrega Automática')
+      .setColor(0x57f287)
+      .setDescription(`**${p.title}**\n\nPagamento confirmado! Aqui está seu produto:`)
+      .addFields({ name: '📦 Conteúdo', value: item.slice(0, 1024) })
+      .setFooter({ text: `Venda #${p.soldCount} • Obrigado por comprar!` }).setTimestamp();
+
+    return i.followUp({ embeds: [emb], ephemeral: true });
   }
-  const emb = new EmbedBuilder().setTitle(p.deliveryType==='auto'?'🎁 Entrega Automática':'🛒 Compra Realizada').setColor(0x57f287)
-    .setDescription(`**${p.title}**\n${p.deliveryType==='auto'?'Aqui está seu produto:':'A staff fará a entrega.'}`)
-    .addFields({name:p.deliveryType==='auto'?'📦 Conteúdo':'⏳ Aguarde',value:item.slice(0,1024)})
-    .setFooter({text:`Venda #${p.soldCount} • Clona-Me`}).setTimestamp();
-  await i.followUp({embeds:[emb],ephemeral:true});
+
+  // Entrega manual — notifica staff
+  const notifEmbed = new EmbedBuilder()
+    .setTitle('🔔 Pagamento Confirmado — Aguardando Entrega')
+    .setColor(0x5865F2)
+    .setDescription(
+      `**${p.title}**\n**Valor:** ${p.price}\n**Comprador:** ${i.user} (${i.user.id})\n\n` +
+      `⏳ A staff precisa confirmar a entrega manualmente.`
+    )
+    .setFooter({ text: `Painel #${p.id}` }).setTimestamp();
+
+  // Se tem canal do painel, envia notificação lá
+  if (p.channelId) {
+    try {
+      const ch = i.client.channels.cache.get(p.channelId);
+      if (ch) {
+        const staffRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder().setCustomId(`staffdeliver_${p.id}`).setLabel('📦 Confirmar Entrega').setStyle(ButtonStyle.Success),
+        );
+        await ch.send({ content: `⚠️ **Novo pagamento!** ${i.user} comprou **${p.title}**.`, embeds: [notifEmbed], components: [staffRow] });
+      }
+    } catch (_) {}
+  }
+
+  p.soldCount++;
+  return i.followUp({ content: '✅ Pagamento registrado! A staff fará a entrega em breve.', ephemeral: true });
+}
+
+async function handlePayCancel(i, cid) {
+  await i.update({ content: '❌ Compra cancelada.', embeds: [], components: [] });
+}
+
+// ═══ STAFF DELIVER ═══
+
+async function handleStaffDeliver(i, cid) {
+  const p = getPanel(pid(cid));
+  if (!p) return safeReply(i, 'Painel expirado.');
+
+  if (!i.memberPermissions?.has('Administrator')) {
+    return safeReply(i, 'Apenas staff pode confirmar entregas.');
+  }
+
+  const item = consumeStock(p.id);
+  if (!item) return safeReply(i, '❌ Estoque esgotado.');
+
+  // Atualiza painel
+  if (p.published && p.messageId) {
+    try {
+      const ch = i.client.channels.cache.get(p.channelId);
+      const msg = await ch?.messages.fetch(p.messageId).catch(() => null);
+      if (msg) await msg.edit({ embeds: [buildPanelEmbed(p)], components: [buildPurchaseButton(p.id, p)] });
+    } catch (_) {}
+  }
+
+  await i.update({ content: `✅ Entrega do painel #${p.id} confirmada.\n\`\`\`${item.slice(0, 1000)}\`\`\``, embeds: [], components: [] });
+}
+
+// ═══ PURCHASE (antigo — mantido para compatibilidade) ═══
+async function handlePurchase(i, cid) {
+  return handlePurchaseStart(i, cid);
 }
 
 // ═══ EDIT MODALS ═══
@@ -192,6 +312,24 @@ async function handleEditConfigBtn(i, cid) {
   if (cid.startsWith('editcfg_delete_')) { deletePanel(pid2); return i.reply({content:`🗑️ Painel #${pid2} "${p.title}" deletado.`,ephemeral:true}); }
 }
 
+// ═══ EDIT — ATUALIZAR PUBLICAÇÃO ═══
+async function handleEditUpdate(i, cid) {
+  const pid2 = pid(cid); const p = getPanel(pid2);
+  if (!p) return safeReply(i, 'Painel expirado.');
+  if (!p.published || !p.messageId) return safeReply(i, 'Este painel não está publicado.');
+  await i.deferReply({ephemeral:true});
+  try {
+    const ch = i.client.channels.cache.get(p.channelId);
+    if (!ch) return i.followUp({content:'Canal não encontrado.',ephemeral:true});
+    const msg = await ch.messages.fetch(p.messageId).catch(() => null);
+    if (!msg) return i.followUp({content:'Mensagem original não encontrada. Republique o painel.',ephemeral:true});
+    const emb = buildPanelEmbed(p);
+    const btn = buildPurchaseButton(p.id, p);
+    await msg.edit({embeds:[emb],components:[btn]});
+    await i.followUp({content:`✅ Painel #${p.id} atualizado em ${ch}.`,ephemeral:true});
+  } catch(e) { await i.followUp({content:`Erro: ${e.message}`,ephemeral:true}); }
+}
+
 // ═══ SELECT MENUS ═══
 async function handleEditSelect(i) {
   const val = i.values[0];
@@ -208,4 +346,35 @@ async function handleDeleteMulti(i) {
   let deleted = 0;
   for (const id of ids) { if (deletePanel(id)) deleted++; }
   await i.reply({content:`🗑️ ${deleted} painel(is) deletado(s).`,ephemeral:true});
+}
+
+// ═══ /config handlers ═══
+async function handleConfigBtn(i, cid) {
+  const act = cid.replace('config_','');
+  if (act === 'pix') return i.showModal(new ModalBuilder().setCustomId('config_pix_main').setTitle('Configurar PIX').addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pix_key').setLabel('Chave PIX').setPlaceholder('Sua chave PIX (CPF/CNPJ/email/telefone)').setStyle(1).setRequired(true).setMaxLength(100)),
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('pix_qr').setLabel('URL do QR Code (opcional)').setPlaceholder('https://i.imgur.com/...').setStyle(1).setRequired(false).setMaxLength(400)),
+  ));
+  if (act === 'desc') return i.showModal(new ModalBuilder().setCustomId('config_desc_main').setTitle('Descrição do Bot').addComponents(
+    new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bot_desc').setLabel('Descrição do perfil').setPlaceholder('Clona-Me • O melhor bot de clone e marketplace').setStyle(2).setRequired(false).setMaxLength(400)),
+  ));
+}
+
+async function handleConfigPix(i, cid) {
+  const key = i.fields.getTextInputValue('pix_key').trim();
+  const qr = i.fields.getTextInputValue('pix_qr')?.trim() || '';
+  const config = require('../config');
+  config.pixKey = key;
+  config.pixQrUrl = qr;
+  await i.reply({content:`✅ PIX configurado!\nChave: \`${key}\`${qr?'\nQR Code: ✅':''}`,ephemeral:true});
+}
+
+async function handleConfigDesc(i, cid) {
+  const desc = i.fields.getTextInputValue('bot_desc').trim();
+  try {
+    await i.client.user.setPresence({
+      activities: [{ name: desc || 'Clona-Me • discord.gg/hykfavEur', type: 4 }]
+    });
+  } catch(_){}
+  await i.reply({content:'✅ Descrição do bot atualizada.',ephemeral:true});
 }
