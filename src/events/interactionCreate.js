@@ -32,7 +32,6 @@ module.exports = {
       }
       return;
     }
-
     if (interaction.isModalSubmit()) {
       const cid = interaction.customId;
       if (cid === 'clone_modal') return handleCmdModal(interaction, 'clone');
@@ -53,19 +52,18 @@ module.exports = {
       if (cid === 'config_avatar_main') return handleConfigAvatar(interaction);
       if (cid === 'config_banner_main') return handleConfigBanner(interaction);
     }
-
     if (interaction.isButton()) {
       const cid = interaction.customId;
       if (cid.startsWith('sellcfg_')) return handleSellConfigBtn(interaction, cid);
       if (cid.startsWith('buy_')) return handlePurchaseStart(interaction, cid);
       if (cid.startsWith('payconfirm_')) return handlePayConfirm(interaction, cid);
       if (cid.startsWith('paycancel_')) return handlePayCancel(interaction, cid);
+      if (cid.startsWith('paycopy_')) return handlePayCopy(interaction, cid);
       if (cid.startsWith('staffdeliver_')) return handleStaffDeliver(interaction, cid);
       if (cid.startsWith('editcfg_')) return handleEditConfigBtn(interaction, cid);
       if (cid.startsWith('editcfg_update_')) return handleEditUpdate(interaction, cid);
       if (cid.startsWith('config_')) return handleConfigBtn(interaction, cid);
     }
-
     if (interaction.isStringSelectMenu()) {
       const cid = interaction.customId;
       if (cid.startsWith('sell_thumb_')) return handleThumbToggle(interaction, cid);
@@ -79,7 +77,6 @@ async function safeReply(i, m) { try { if (i.replied||i.deferred) await i.follow
 function pid(cid) { return parseInt(cid.split('_').pop()); }
 async function handleCmdModal(i, name) { const cmd = i.client.commands.get(name); if (!cmd?.handleModal) return safeReply(i, 'Erro interno.'); try { await cmd.handleModal(i); } catch(e) { console.error(`[ERRO] ${name}:`, e.message); await safeReply(i, `Erro: ${e.message.slice(0,200)}`); } }
 
-// ═══ STOCK / DELIVERY / ICON / BANNER / DISPLAY ═══
 async function handleStock(i, cid) {
   const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
   p.lockStock = i.fields.getTextInputValue('stock_lock').trim().toLowerCase().startsWith('s');
@@ -93,7 +90,6 @@ async function handleIcon(i, cid) { const p = getPanel(pid(cid)); if (!p) return
 async function handleBanner(i, cid) { const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.'); p.bannerUrl = i.fields.getTextInputValue('banner_url').trim(); await i.reply({content:p.bannerUrl?'✅ Banner atualizado.':'✅ Banner removido.',ephemeral:true}); }
 async function handleDisplay(i, cid) { const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.'); p.showStock = i.fields.getTextInputValue('show_stock').trim().toLowerCase().startsWith('s'); p.showSold = i.fields.getTextInputValue('show_sold').trim().toLowerCase().startsWith('s'); await i.reply({content:`✅ Estoque: ${p.showStock?'visível':'oculto'} • Vendidos: ${p.showSold?'visível':'oculto'}`,ephemeral:true}); }
 
-// ═══ SELL CONFIG ═══
 async function handleSellConfigBtn(i, cid) {
   const pid2 = pid(cid); const p = getPanel(pid2); if (!p) return safeReply(i, 'Painel expirado.');
   const act = cid.replace(/sellcfg_/,'').replace(/_\d+$/,'');
@@ -124,15 +120,25 @@ async function handlePurchaseStart(i, cid) {
   const hasStock = p.lockStock || p.stock.some(s => !s.used);
   if (!hasStock) return safeReply(i, '❌ Estoque esgotado.');
   const config = require('../config');
+  const pixKey = config.pixKey || 'PIX não configurado';
   const pixEmbed = new EmbedBuilder().setTitle('💳 Pagamento — ' + p.title).setColor(0xF0B232)
-    .setDescription(`**Produto:** ${p.title}\n**Valor:** ${p.price}\n**Entrega:** ${p.deliveryType==='auto'?'⚡ Automática':'👤 Manual'}\n\n**Chave PIX:**\n\`\`\`${config.pixKey||'Não configurado'}\`\`\`${config.pixQrUrl?'':'\n⚠️ QR Code não configurado.'}`)
-    .setFooter({text:'Após pagar, clique em "Já paguei"'});
+    .setDescription(`**Produto:** ${p.title}\n**Valor:** ${p.price}\n**Entrega:** ${p.deliveryType==='auto'?'⚡ Automática':'👤 Manual'}`)
+    .addFields({name:'🔑 Chave PIX',value:`\`\`\`${pixKey}\`\`\``})
+    .setFooter({text:'Copie a chave PIX e pague. Depois clique em "Já paguei"'});
   if (config.pixQrUrl) pixEmbed.setImage(config.pixQrUrl);
+  // Botões: Copiar | Já paguei | Cancelar
   const btns = new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId(`paycopy_${p.id}`).setLabel('📋 Copiar').setStyle(ButtonStyle.Secondary),
     new ButtonBuilder().setCustomId(`payconfirm_${p.id}`).setLabel('✅ Já paguei').setStyle(ButtonStyle.Success),
     new ButtonBuilder().setCustomId(`paycancel_${p.id}`).setLabel('❌ Cancelar').setStyle(ButtonStyle.Danger),
   );
   await i.reply({embeds:[pixEmbed],components:[btns],ephemeral:true});
+}
+// Botão Copiar — envia a chave limpa em mensagem ephemeral fácil de copiar
+async function handlePayCopy(i, cid) {
+  const config = require('../config');
+  const pixKey = config.pixKey || 'PIX não configurado';
+  await i.reply({content:`📋 **Copie a chave PIX abaixo:**\n\`\`\`\n${pixKey}\n\`\`\``,ephemeral:true});
 }
 async function handlePayConfirm(i, cid) {
   const p = getPanel(pid(cid)); if (!p) return safeReply(i, 'Painel expirado.');
@@ -193,7 +199,6 @@ async function handleEditUpdate(i, cid) {
   } catch(e) { await i.followUp({content:`Erro: ${e.message}`,ephemeral:true}); }
 }
 
-// ═══ SELECTS ═══
 async function handleEditSelect(i) { const val=i.values[0]; if(!val.startsWith('panel_')) return safeReply(i,'Inválido.'); const panelId=parseInt(val.replace('panel_','')); const p=getPanel(panelId); if(!p) return safeReply(i,'Não encontrado.'); await showEditMenu(i,p); }
 async function handleDeleteMulti(i) { const ids=i.values.filter(v=>v.startsWith('delete_')).map(v=>parseInt(v.replace('delete_',''))); if(!ids.length) return safeReply(i,'Nenhum.'); let d=0; for(const id of ids){if(deletePanel(id))d++;} await i.reply({content:`🗑️ ${d} painel(is) deletado(s).`,ephemeral:true}); }
 
@@ -214,7 +219,6 @@ async function handleConfigBtn(i, cid) {
     new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('banner_url').setLabel('URL da imagem do banner').setPlaceholder('https://i.imgur.com/...').setStyle(1).setRequired(true).setMaxLength(400)),
   ));
 }
-
 async function handleConfigPix(i) {
   const key = i.fields.getTextInputValue('pix_key').trim();
   const qr = i.fields.getTextInputValue('pix_qr')?.trim() || '';
@@ -223,33 +227,22 @@ async function handleConfigPix(i) {
   config.pixQrUrl = qr;
   await i.reply({content:`✅ PIX: \`${key}\`${qr?' + QR Code':''}`,ephemeral:true});
 }
-
 async function handleConfigDesc(i) {
   const desc = i.fields.getTextInputValue('bot_desc')?.trim() || 'Clona-Me • discord.gg/hykfavEur';
-  try {
-    await i.client.user.setPresence({ activities: [{ name: desc, type: 4 }] });
-  } catch(e) { console.error('[CONFIG] Desc:', e.message); }
+  try { await i.client.user.setPresence({ activities: [{ name: desc, type: 4 }] }); } catch(e) { console.error('[CONFIG] Desc:', e.message); }
   await i.reply({content:'✅ Descrição do bot atualizada.',ephemeral:true});
 }
-
 async function handleConfigAvatar(i) {
   const url = i.fields.getTextInputValue('avatar_url').trim();
   if (!url) return safeReply(i, 'URL obrigatória.');
   await i.deferReply({ephemeral:true});
-  try {
-    const buffer = await downloadImage(url);
-    await i.client.user.setAvatar(buffer);
-    await i.followUp({content:'✅ Avatar do bot atualizado!',ephemeral:true});
-  } catch(e) { await i.followUp({content:`❌ Erro: ${e.message}`,ephemeral:true}); }
+  try { const buffer = await downloadImage(url); await i.client.user.setAvatar(buffer); await i.followUp({content:'✅ Avatar do bot atualizado!',ephemeral:true}); }
+  catch(e) { await i.followUp({content:`❌ Erro: ${e.message}`,ephemeral:true}); }
 }
-
 async function handleConfigBanner(i) {
   const url = i.fields.getTextInputValue('banner_url').trim();
   if (!url) return safeReply(i, 'URL obrigatória.');
   await i.deferReply({ephemeral:true});
-  try {
-    const buffer = await downloadImage(url);
-    await i.client.user.setBanner(buffer);
-    await i.followUp({content:'✅ Banner do bot atualizado!',ephemeral:true});
-  } catch(e) { await i.followUp({content:`❌ Erro: ${e.message}`,ephemeral:true}); }
+  try { const buffer = await downloadImage(url); await i.client.user.setBanner(buffer); await i.followUp({content:'✅ Banner do bot atualizado!',ephemeral:true}); }
+  catch(e) { await i.followUp({content:`❌ Erro: ${e.message}`,ephemeral:true}); }
 }
